@@ -1,0 +1,143 @@
+{
+  "name": "my-sidebar-extension",
+  "displayName": "SVN Revision Manager",
+  "description": "Manage SVN revisions by organizing them into groups, viewing diffs, generating file lists, and more.",
+  "version": "0.1.0",
+  "publisher": "GooiYinHong",
+  "icon": "media/Logo.jpg",
+  "engines": {
+    "vscode": "^1.80.0"
+  },
+  "categories": ["SCM Providers", "Other"],
+    "keywords": [
+    "svn",
+    "source control",
+    "subversion",
+    "diff",
+    "revision",
+    "grouping",
+    "history",
+    "code review"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/<your-repo-url>.git"
+  },
+  "license": "MIT",
+  "activationEvents": [
+    "onCommand:svnRevisionManager.addGroup",
+    "onCommand:svnRevisionManager.addRevisionToGroup",
+    "onCommand:svnRevisionManager.openOnDoubleClick",
+    "onView:svnRevisionManagerView",
+    "onStartupFinished"
+  ],
+  "main": "./extension.js",
+  "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "svnRevisionManagerSidebar",
+          "title": "SVN Revision Manager",
+          "icon": "media/icon.svg"
+        }
+      ]
+    },
+    "views": {
+      "svnRevisionManagerSidebar": [
+        {
+          "id": "svnRevisionManagerView",
+          "name": "Revisions"
+        }
+      ]
+    },
+    "commands": [
+      {
+        "command": "svnRevisionManager.addGroup",
+        "title": "Add Group"
+      },
+      {
+        "command": "svnRevisionManager.addRevisionToGroup",
+        "title": "Add Revision to Group"
+      },
+      {
+        "command": "svnRevisionManager.openOnDoubleClick",
+        "title": "Open Diff"
+      },
+      {
+        "command": "svnRevisionManager.deleteGroup",
+        "title": "Delete Group"
+      },
+      {
+        "command": "svnRevisionManager.copyFileName",
+        "title": "Copy File Name"
+      },
+      {
+        "command": "svnRevisionManager.copyFilePathFull",
+        "title": "Copy File Path + Filename"
+      },
+      {
+        "command": "svnRevisionManager.renameGroup",
+        "title": "Rename Group"
+      },
+      {
+        "command": "svnRevisionManager.deleteRevision",
+        "title": "Delete Revision"
+      },
+      {
+        "command": "svnRevisionManager.generateFileList",
+        "title": "Generate File List"
+      }
+    ],
+    "menus": {
+      "view/title": [
+        {
+          "command": "svnRevisionManager.addGroup",
+          "when": "view == svnRevisionManagerView",
+          "group": "navigation"
+        }
+      ],
+      "view/item/context": [
+        {
+          "command": "svnRevisionManager.deleteGroup",
+          "when": "viewItem == group",
+          "group": "inline"
+        },{
+          "command": "svnRevisionManager.copyFileName",
+          "when": "viewItem == file",
+          "group": "navigation"
+        },
+        {
+          "command": "svnRevisionManager.copyFilePathFull",
+          "when": "viewItem == file",
+          "group": "navigation"
+        },
+        {
+          "command": "svnRevisionManager.renameGroup",
+          "when": "viewItem == group",
+          "group": "inline"
+        },
+        {
+          "command": "svnRevisionManager.deleteRevision",
+          "when": "viewItem == revision",
+          "group": "inline"
+        },
+        {
+          "command": "svnRevisionManager.generateFileList",
+          "when": "viewItem == group",
+          "group": "inline"
+        }
+      ]
+    },
+    "configuration": {
+      "type": "object",
+      "title": "SVN Revision Group Settings",
+      "properties": {
+        "svnRevisionGroup.workingFolder": {
+          "type": "string",
+          "default": "",
+          "description": "Full path to your SVN working copy folder."
+        }
+      }
+    }
+  }
+}
