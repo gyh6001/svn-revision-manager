@@ -11,12 +11,18 @@ function activate(context) {
 
     ensureStorageFolderExists(context.globalStorageUri.fsPath);
 
-    const provider = new MyTreeDataProvider(storageFile);
+    const provider = new MyTreeDataProvider(context);
     provider.load();   // <-- load groups + revisions
 
     vscode.window.createTreeView("svnRevisionManagerView", {
         treeDataProvider: provider
     });
+
+    updateDataPathDescription(context);
+
+    vscode.window.showInformationMessage(
+        `SVN Revision Manager default data location: ${context.globalStorageUri.fsPath}`
+    );
 
     /* -------------------- COMMAND: ADD GROUP -------------------- */
     context.subscriptions.push(
@@ -237,7 +243,7 @@ function getChangedFiles(revision) {
 
     return new Promise((resolve, reject) => {
         exec(
-            `svn diff -c ${revision} --summarize`,
+            `"${getSvnPath()}" diff -c ${revision} --summarize`,
             { cwd: getWorkingFolder() },
             (err, stdout) => {
                 if (err) return reject(err);
@@ -261,8 +267,8 @@ function runSvnDiff(revision, filePath = null) {
     const { exec } = require("child_process");
 
     let cmd = filePath
-        ? `svn diff -c ${revision} "${filePath}"`
-        : `svn diff -c ${revision}`;
+        ? `"${getSvnPath()}" diff -c ${revision} "${filePath}"`
+        : `"${getSvnPath()}" diff -c ${revision}`;
 
     return new Promise((resolve, reject) => {
         exec(
@@ -279,8 +285,8 @@ function runSvnDiff(revision, filePath = null) {
 /* ------------------------------ PROVIDER -------------------------------- */
 
 class MyTreeDataProvider {
-    constructor(storageFile) {
-        this.storageFile = storageFile;
+    constructor(context) {
+        this.context = context;
         this.groups = {};
         this._onDidChangeTreeData = new vscode.EventEmitter();
         this.onDidChangeTreeData = this._onDidChangeTreeData.event;
@@ -288,17 +294,29 @@ class MyTreeDataProvider {
 
     /* ---------- Load groups & revisions from JSON ---------- */
     load() {
-        if (!fs.existsSync(this.storageFile)) return;
-        const data = JSON.parse(fs.readFileSync(this.storageFile, "utf8"));
-        this.groups = data.groups || {};
-        this.refresh();
+        const filePath = getDataFilePath(this.context);
+
+        try {
+            if (fs.existsSync(filePath)) {
+                const content = fs.readFileSync(filePath, "utf8");
+                this.groups = JSON.parse(content);
+            }
+        } catch (err) {
+            vscode.window.showErrorMessage("Failed to load extension data: " + err.message);
+            this.groups = {};
+        }
     }
 
     /* ---------- Save groups ---------- */
     save() {
-        fs.writeFileSync(this.storageFile, JSON.stringify({
-            groups: this.groups
-        }, null, 2));
+        const filePath = getDataFilePath(this.context);
+
+        try {
+            fs.mkdirSync(path.dirname(filePath), { recursive: true });
+            fs.writeFileSync(filePath, JSON.stringify(this.groups, null, 2), "utf8");
+        } catch (err) {
+            vscode.window.showErrorMessage("Failed to save extension data: " + err.message);
+        }
     }
 
     /* ---------- Add group ---------- */
@@ -508,7 +526,7 @@ function svnCat(filePath, revision) {
 
     return new Promise((resolve, reject) => {
         exec(
-            `svn cat "${filePath}" -r ${revision}`,
+            `"${getSvnPath()}" cat "${filePath}" -r ${revision}`,
             { cwd: getWorkingFolder(), maxBuffer: 1024 * 1024 * 10 },
             (err, stdout, stderr) => {
                 if (err) {
@@ -545,6 +563,46 @@ function getWorkingFolder() {
     }
 
     return folder;
+}
+
+function getSvnPath() {
+    const config = vscode.workspace.getConfiguration("svnRevisionGroup");
+    const svnPath = config.get("svnPath");
+
+    if (!svnPath || svnPath.trim() === "") {
+        return "svn";   // Use system PATH
+    }
+
+    return svnPath;
+}
+
+function updateDataPathDescription(context) {
+    const config = vscode.workspace.getConfiguration("svnRevisionGroup");
+    const inspect = config.inspect("dataPath");
+
+    const defaultPath = context.globalStorageUri.fsPath;
+
+    // Replace {default} placeholder in package.json setting description
+    // VS Code does NOT allow dynamic package.json, so we apply at runtime
+    vscode.languages.setLanguageConfiguration("json", {
+        onEnterRules: []
+    });
+
+    // Show info message to user (or log) about default storage path
+    // This is optional but helpful
+    console.log(`SVN Revision Manager default storage path: ${defaultPath}`);
+}
+
+function getDataFilePath(context) {
+    const config = vscode.workspace.getConfiguration("svnRevisionGroup");
+    const customPath = config.get("dataPath");
+
+    if (customPath && customPath.trim() !== "") {
+        return path.join(customPath, "revisions.json");
+    }
+
+    // Default path
+    return path.join(context.globalStorageUri.fsPath, "revisions.json");
 }
 
 function deactivate() {}

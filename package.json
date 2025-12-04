@@ -1,8 +1,8 @@
 {
-  "name": "my-sidebar-extension",
+  "name": "svn-revision-manager",
   "displayName": "SVN Revision Manager",
   "description": "Manage SVN revisions by organizing them into groups, viewing diffs, generating file lists, and more.",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "publisher": "GooiYinHong",
   "icon": "media/Logo.jpg",
   "engines": {
@@ -136,6 +136,16 @@
           "type": "string",
           "default": "",
           "description": "Full path to your SVN working copy folder."
+        },
+        "svnRevisionGroup.svnPath": {
+          "type": "string",
+          "default": "svn",
+          "description": "Full path to svn.exe. Example: C:/Program Files/svn/bin/svn.exe"
+        },
+        "svnRevisionGroup.dataPath": {
+          "type": "string",
+          "default": "",
+          "description": "Custom path to store extension data (revisions.json). Leave empty to use the default storage path: {default}"
         }
       }
     }
