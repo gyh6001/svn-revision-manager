@@ -169,6 +169,77 @@ function activate(context) {
             provider.generateFileList(groupName);
         })
     );
+
+    // Register lock file command
+    let lockFileDisposable = vscode.commands.registerCommand('svnRevisionManager.lockFile', async (node) => {
+        let filePath;
+        
+        // Check if called from explorer (node is a Uri) or from custom tree view
+        if (node instanceof vscode.Uri) {
+            // Called from explorer
+            const workingFolder = getWorkingFolder();
+            filePath = path.relative(workingFolder, node.fsPath);
+        } else if (node && node.contextValue === 'file') {
+            // Called from custom tree view
+            filePath = node.filePath;
+        } else {
+            vscode.window.showErrorMessage('Please select a file.');
+            return;
+        }
+        
+        await lockFile(filePath, false);
+    });
+
+    // Register force lock file command
+    let forceLockFileDisposable = vscode.commands.registerCommand('svnRevisionManager.forceLockFile', async (node) => {
+        let filePath;
+        let fileName;
+        
+        // Check if called from explorer or custom tree view
+        if (node instanceof vscode.Uri) {
+            const workingFolder = getWorkingFolder();
+            filePath = path.relative(workingFolder, node.fsPath);
+            fileName = path.basename(node.fsPath);
+        } else if (node && node.contextValue === 'file') {
+            filePath = node.filePath;
+            fileName = node.label;
+        } else {
+            vscode.window.showErrorMessage('Please select a file.');
+            return;
+        }
+        
+        const confirm = await vscode.window.showWarningMessage(
+            `Force lock "${fileName}"? This will steal the lock from another user.`,
+            { modal: true },
+            'Yes', 'No'
+        );
+        
+        if (confirm === 'Yes') {
+            await lockFile(filePath, true);
+        }
+    });
+
+    // Register unlock file command
+    let unlockFileDisposable = vscode.commands.registerCommand('svnRevisionManager.unlockFile', async (node) => {
+        let filePath;
+        
+        // Check if called from explorer or custom tree view
+        if (node instanceof vscode.Uri) {
+            const workingFolder = getWorkingFolder();
+            filePath = path.relative(workingFolder, node.fsPath);
+        } else if (node && node.contextValue === 'file') {
+            filePath = node.filePath;
+        } else {
+            vscode.window.showErrorMessage('Please select a file.');
+            return;
+        }
+        
+        await unlockFile(filePath);
+    });
+
+    context.subscriptions.push(lockFileDisposable);
+    context.subscriptions.push(forceLockFileDisposable);
+    context.subscriptions.push(unlockFileDisposable);
 }
 
 /* ------------------------------ TREE ITEM CLASS -------------------------------- */
@@ -447,7 +518,7 @@ class MyTreeDataProvider {
                         title: "Add Revision",
                         arguments: [{ groupName }]
                     }
-                })
+                )
             );
 
             // Revisions
@@ -603,6 +674,67 @@ function getDataFilePath(context) {
 
     // Default path
     return path.join(context.globalStorageUri.fsPath, "revisions.json");
+}
+
+// Helper function to lock a file
+async function lockFile(filePath, force = false) {
+    const config = vscode.workspace.getConfiguration('svnRevisionGroup');
+    const workingFolder = config.get('workingFolder');
+    const svnPath = config.get('svnPath') || 'svn';
+
+    if (!workingFolder) {
+        vscode.window.showErrorMessage('Please set the SVN working folder in settings.');
+        return;
+    }
+
+    const fullPath = path.join(workingFolder, filePath);
+    
+    const message = await vscode.window.showInputBox({
+        prompt: 'Enter lock message (optional)',
+        placeHolder: 'Lock message'
+    });
+
+    if (message === undefined) {
+        return; // User cancelled
+    }
+
+    const { exec } = require('child_process');
+    const forceFlag = force ? ' --force' : '';
+    const messageFlag = message ? ` -m "${message}"` : '';
+    const command = `"${svnPath}" lock${forceFlag}${messageFlag} "${fullPath}"`;
+
+    exec(command, { cwd: workingFolder }, (error, stdout, stderr) => {
+        if (error) {
+            vscode.window.showErrorMessage(`Failed to lock file: ${stderr || error.message}`);
+            return;
+        }
+        vscode.window.showInformationMessage(`Successfully locked: ${path.basename(filePath)}`);
+    });
+}
+
+// Helper function to unlock a file
+async function unlockFile(filePath) {
+    const config = vscode.workspace.getConfiguration('svnRevisionGroup');
+    const workingFolder = config.get('workingFolder');
+    const svnPath = config.get('svnPath') || 'svn';
+
+    if (!workingFolder) {
+        vscode.window.showErrorMessage('Please set the SVN working folder in settings.');
+        return;
+    }
+
+    const fullPath = path.join(workingFolder, filePath);
+
+    const { exec } = require('child_process');
+    const command = `"${svnPath}" unlock "${fullPath}"`;
+
+    exec(command, { cwd: workingFolder }, (error, stdout, stderr) => {
+        if (error) {
+            vscode.window.showErrorMessage(`Failed to unlock file: ${stderr || error.message}`);
+            return;
+        }
+        vscode.window.showInformationMessage(`Successfully unlocked: ${path.basename(filePath)}`);
+    });
 }
 
 function deactivate() {}

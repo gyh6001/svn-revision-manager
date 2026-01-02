@@ -1,53 +1,29 @@
 # SVN Revision Manager
 
-**SVN Revision Manager** is a Visual Studio Code extension designed to improve the workflow of developers working with Subversion (SVN).  
-It provides an organized, group-based system for managing revisions, browsing changes, and generating file summaries—all directly within the VS Code interface.
+Manage SVN revisions by organizing them into groups, viewing diffs, generating file lists, and more.
 
-This extension enhances productivity for teams maintaining legacy systems or large monolithic codebases where SVN remains the primary version control tool.
+## Features
 
----
+- Organize SVN revisions into groups
+- View file diffs for specific revisions
+- Generate consolidated file lists
+- Lock/unlock files directly from VS Code
+- Copy file names and paths
 
-## Key Features
+## Requirements
 
-### • Group-Based Revision Management  
-Organize SVN revisions into custom groups such as “Bug Fixes,” “Feature Modules,” or “Hotfixes” for structured tracking and review.
+- SVN command-line tool must be installed
+- Access to an SVN repository
 
-### • Add and Manage Revisions  
-Add revisions into groups with automatic retrieval of commit messages and changed file lists.
+## Extension Settings
 
-### • File and Revision Diff Views  
-- Double-click a revision to view the full patch.  
-- Double-click a file to view the file-specific patch generated via `svn diff -c`.
+- `svnRevisionGroup.workingFolder`: Full path to your SVN working copy folder
+- `svnRevisionGroup.svnPath`: Full path to svn.exe (default: "svn")
+- `svnRevisionGroup.dataPath`: Custom path to store extension data
 
-### • Inline File Listings  
-Expand a revision to view all changed files.  
-Supports copying:
-- File name only  
-- Full relative file path  
+## Usage
 
-### • Generate Deduplicated File Lists  
-Right-click a group to produce a consolidated, deduplicated list of all files affected by revisions within the group.  
-The result opens in a new text editor tab.
-
-### • Editing and Cleanup Tools  
-- Rename groups  
-- Delete groups  
-- Delete revisions  
-
-### • Automatic Persistence  
-All groups and revisions are saved using VS Code global storage and restored upon startup.
-
-### • Icon Support  
-Custom icons are provided for group nodes with compatibility for both light and dark themes.
-
-### • Configurable Working Directory  
-Specify your SVN working folder in VS Code Settings for accurate diff and log retrieval.
-
----
-
-## Installation
-
-### From VSIX (Local installation)
-
-```sh
-vsce package
+1. Set your SVN working folder in settings
+2. Open the SVN Revision Manager sidebar
+3. Create groups and add revisions
+4. Right-click files to lock/unlock.
