@@ -28,12 +28,13 @@ function activate(context) {
     context.subscriptions.push(
         vscode.commands.registerCommand("svnRevisionManager.addGroup", async () => {
             const groupName = await vscode.window.showInputBox({
-                prompt: "Enter group name"
+                prompt: "Enter group name",
+                placeHolder: "e.g., Bug Fixes"
             });
-
-            if (groupName && groupName.trim()) {
-                provider.addGroup(groupName.trim());
-            }
+            
+            if (!groupName) return;
+            
+            provider.addGroup(groupName);
         })
     );
 
@@ -518,7 +519,7 @@ class MyTreeDataProvider {
                         title: "Add Revision",
                         arguments: [{ groupName }]
                     }
-                )
+                })
             );
 
             // Revisions
@@ -547,7 +548,8 @@ class MyTreeDataProvider {
                     collapsibleState: vscode.TreeItemCollapsibleState.None,
                     revision: element.revision,
                     filePath: f,
-                    isFile: true
+                    isFile: true,
+                    groupName: element.groupName  // <-- ADD THIS LINE
                 })
             );
         }

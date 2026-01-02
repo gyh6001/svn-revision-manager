@@ -2,7 +2,7 @@
   "name": "svn-revision-manager",
   "displayName": "SVN Revision Manager",
   "description": "Manage SVN revisions by organizing them into groups, viewing diffs, generating file lists, and more.",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "publisher": "GooiYinHong",
   "icon": "media/Logo.jpg",
   "engines": {
@@ -25,10 +25,6 @@
   },
   "license": "MIT",
   "activationEvents": [
-    "onCommand:svnRevisionManager.addGroup",
-    "onCommand:svnRevisionManager.addRevisionToGroup",
-    "onCommand:svnRevisionManager.openOnDoubleClick",
-    "onView:svnRevisionManagerView",
     "onStartupFinished"
   ],
   "main": "./extension.js",
