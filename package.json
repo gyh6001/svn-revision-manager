@@ -2,7 +2,7 @@
   "name": "svn-revision-manager",
   "displayName": "SVN Revision Manager",
   "description": "Manage SVN revisions by organizing them into groups, viewing diffs, generating file lists, and more.",
-  "version": "0.3.1",
+  "version": "0.3.2",
   "publisher": "GooiYinHong",
   "icon": "media/Logo.jpg",
   "engines": {
@@ -107,32 +107,32 @@
       "view/item/context": [
         {
           "command": "svnRevisionManager.deleteGroup",
-          "when": "viewItem == group",
+          "when": "view == svnRevisionManagerView && viewItem == group",
           "group": "inline"
         },
         {
           "command": "svnRevisionManager.copyFileName",
-          "when": "viewItem == file",
+          "when": "view == svnRevisionManagerView && viewItem == file",
           "group": "navigation"
         },
         {
           "command": "svnRevisionManager.copyFilePathFull",
-          "when": "viewItem == file",
+          "when": "view == svnRevisionManagerView && viewItem == file",
           "group": "navigation"
         },
         {
           "command": "svnRevisionManager.renameGroup",
-          "when": "viewItem == group",
+          "when": "view == svnRevisionManagerView && viewItem == group",
           "group": "inline"
         },
         {
           "command": "svnRevisionManager.deleteRevision",
-          "when": "viewItem == revision",
+          "when": "view == svnRevisionManagerView && viewItem == revision",
           "group": "inline"
         },
         {
           "command": "svnRevisionManager.generateFileList",
-          "when": "viewItem == group",
+          "when": "view == svnRevisionManagerView && viewItem == group",
           "group": "inline"
         }
       ],
