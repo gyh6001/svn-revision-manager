@@ -2,7 +2,7 @@
   "name": "svn-revision-manager",
   "displayName": "SVN Revision Manager",
   "description": "Manage SVN revisions by organizing them into groups, viewing diffs, generating file lists, and more.",
-  "version": "0.3.2",
+  "version": "0.3.3",
   "publisher": "GooiYinHong",
   "icon": "media/Logo.jpg",
   "engines": {
