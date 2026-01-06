@@ -9,6 +9,7 @@ Manage SVN revisions by organizing them into groups, viewing diffs, generating f
 - Generate consolidated file lists
 - Lock/unlock files directly from VS Code
 - Copy file names and paths
+- Add Decorations for Locked, Modified, Unversioned, Ignored files in Explorer Tab
 
 ## Requirements
 

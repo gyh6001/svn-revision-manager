@@ -1,6 +1,7 @@
 const vscode = require('vscode');
 const fs = require('fs');
 const path = require('path');
+const { exec } = require('child_process'); // you already use this
 
 const SVN_WORKING_FOLDER = "";
 
@@ -241,6 +242,20 @@ function activate(context) {
     context.subscriptions.push(lockFileDisposable);
     context.subscriptions.push(forceLockFileDisposable);
     context.subscriptions.push(unlockFileDisposable);
+
+    // Register decoration provider
+    const decorationProvider = new SvnDecorationProvider();
+    context.subscriptions.push(vscode.window.registerFileDecorationProvider(decorationProvider));
+
+    // Refresh decorations every 120 seconds
+    const interval = setInterval(() => decorationProvider.refreshAll(), 120_000);
+    context.subscriptions.push({ dispose: () => clearInterval(interval) });
+
+    // Refresh on save
+    context.subscriptions.push(vscode.workspace.onDidSaveTextDocument(() => decorationProvider.refreshAll()));
+
+    // Initial refresh (safe, won’t throw)
+    decorationProvider.refreshAll();
 }
 
 /* ------------------------------ TREE ITEM CLASS -------------------------------- */
@@ -638,6 +653,20 @@ function getWorkingFolder() {
     return folder;
 }
 
+// Safe working folder helper (does not throw)
+function getWorkingFolderSafe() {
+    try {
+        const config = vscode.workspace.getConfiguration("svnRevisionGroup");
+        const folder = config.get("workingFolder");
+        if (!folder || folder.trim() === "") {
+            return null;
+        }
+        return folder;
+    } catch {
+        return null;
+    }
+}
+
 function getSvnPath() {
     const config = vscode.workspace.getConfiguration("svnRevisionGroup");
     const svnPath = config.get("svnPath");
@@ -736,6 +765,147 @@ async function unlockFile(filePath) {
             return;
         }
         vscode.window.showInformationMessage(`Successfully unlocked: ${path.basename(filePath)}`);
+    });
+}
+
+class SvnDecorationProvider {
+    constructor() {
+        this._emitter = new vscode.EventEmitter();
+        this.onDidChangeFileDecorations = this._emitter.event;
+        this._statusCache = new Map(); // key: normalized lowercase abs path, value: { status }
+        this._isRefreshing = false;
+    }
+
+    // Normalize Windows paths and lowercase to match Explorer on Windows
+    _keyFor(fsPath) {
+        return path.normalize(fsPath).toLowerCase();
+    }
+
+    provideFileDecoration(uri) {
+        const key = this._keyFor(uri.fsPath);
+        const entry = this._statusCache.get(key);
+        if (!entry) return;
+
+        // Two bits: badge + color (use stable gitDecoration theme colors)
+        switch (entry.status) {
+            case 'locked':
+                return {
+                    badge: 'L',
+                    tooltip: 'SVN: Locked',
+                    color: new vscode.ThemeColor('gitDecoration.ignoredResourceForeground') // neutral-ish
+                };
+            case 'modified':
+                return {
+                    badge: 'M',
+                    tooltip: 'SVN: Modified',
+                    color: new vscode.ThemeColor('gitDecoration.modifiedResourceForeground')
+                };
+            case 'unversioned':
+                return {
+                    badge: 'U',
+                    tooltip: 'SVN: Unversioned',
+                    color: new vscode.ThemeColor('gitDecoration.untrackedResourceForeground')
+                };
+            case 'ignored':
+                return {
+                    badge: 'I',
+                    tooltip: 'SVN: Ignored',
+                    color: new vscode.ThemeColor('gitDecoration.ignoredResourceForeground')
+                };
+            default:
+                return;
+        }
+    }
+
+    async refreshAll() {
+        if (this._isRefreshing) return;
+        this._isRefreshing = true;
+        try {
+            const root = getWorkingFolderSafe();
+            if (!root || !fs.existsSync(root)) {
+                this._statusCache.clear();
+                this._emitter.fire(undefined); // refresh all
+                return;
+            }
+
+            const statuses = await this._collectStatuses(root);
+            this._statusCache = statuses;
+            this._emitter.fire(undefined); // refresh all
+        } catch (e) {
+            console.error('SVN decorations refresh failed:', e);
+            this._statusCache.clear();
+            this._emitter.fire(undefined);
+        } finally {
+            this._isRefreshing = false;
+        }
+    }
+
+    async _collectStatuses(root) {
+        const cache = new Map();
+        const svnPath = getSvnPath();
+        if (!svnPath) return cache;
+
+        let stdout = '';
+        try {
+            const result = await execAsync(`"${svnPath}" status -u --ignore-externals`, { cwd: root });
+            stdout = result.stdout || '';
+        } catch {
+            return cache;
+        }
+
+        const lines = stdout.split(/\r?\n/).filter(l => l.trim().length > 0);
+        const lockCandidates = [];
+
+        for (const line of lines) {
+            const trimmed = line.trim();
+            const code = trimmed[0];
+
+            // Path is the last token
+            const parts = trimmed.split(/\s+/);
+            const rel = parts[parts.length - 1];
+            if (!rel) continue;
+
+            const abs = path.join(root, rel);
+            const key = this._keyFor(abs);
+
+            if (code === 'M') {
+                cache.set(key, { status: 'modified' });
+            } else if (code === '?') {
+                cache.set(key, { status: 'unversioned' });
+            } else if (code === 'I') {
+                cache.set(key, { status: 'ignored' });
+            }
+
+            // Lock candidates
+            const header = line.slice(0, 8);
+            if (/[KL]/.test(header)) {
+                lockCandidates.push({ abs, key });
+            }
+        }
+
+        // Confirm locks via 'svn info'
+        for (const { abs, key } of lockCandidates) {
+            try {
+                const { stdout: infoOut } = await execAsync(`"${svnPath}" info "${abs}"`, { cwd: root });
+                if (/Lock\s+Owner:/i.test(infoOut)) {
+                    cache.set(key, { status: 'locked' });
+                }
+            } catch {
+                // ignore
+            }
+        }
+
+        return cache;
+    }
+}
+
+// Utility used by provider
+function execAsync(cmd, opts) {
+    return new Promise((resolve, reject) => {
+        exec(cmd, opts, (error, stdout, stderr) => {
+            if (error) reject(error);
+            else resolve({ stdout, stderr });
+        });
     });
 }
 
