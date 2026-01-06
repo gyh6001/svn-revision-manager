@@ -888,7 +888,11 @@ class SvnDecorationProvider {
             try {
                 const { stdout: infoOut } = await execAsync(`"${svnPath}" info "${abs}"`, { cwd: root });
                 if (/Lock\s+Owner:/i.test(infoOut)) {
-                    cache.set(key, { status: 'locked' });
+                    // Only set 'locked' if not already marked 'modified'
+                    const existing = cache.get(key);
+                    if (!existing || existing.status !== 'modified') {
+                        cache.set(key, { status: 'locked' });
+                    }
                 }
             } catch {
                 // ignore
