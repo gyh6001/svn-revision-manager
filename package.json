@@ -49,7 +49,8 @@
     "commands": [
       {
         "command": "svnRevisionManager.addGroup",
-        "title": "Add Group"
+        "title": "Add Group",
+        "icon": "$(add)"
       },
       {
         "command": "svnRevisionManager.addRevisionToGroup",
@@ -61,7 +62,8 @@
       },
       {
         "command": "svnRevisionManager.deleteGroup",
-        "title": "Delete Group"
+        "title": "Delete Group",
+        "icon": "$(trash)"
       },
       {
         "command": "svnRevisionManager.copyFileName",
@@ -73,15 +75,18 @@
       },
       {
         "command": "svnRevisionManager.renameGroup",
-        "title": "Rename Group"
+        "title": "Rename Group",
+        "icon": "$(edit)"
       },
       {
         "command": "svnRevisionManager.deleteRevision",
-        "title": "Delete Revision"
+        "title": "Delete Revision",
+        "icon": "$(close)"
       },
       {
         "command": "svnRevisionManager.generateFileList",
-        "title": "Generate File List"
+        "title": "Generate File List",
+        "icon": "$(list-unordered)"
       },
       {
         "command": "svnRevisionManager.lockFile",
@@ -111,16 +116,6 @@
           "group": "inline"
         },
         {
-          "command": "svnRevisionManager.copyFileName",
-          "when": "view == svnRevisionManagerView && viewItem == file",
-          "group": "navigation"
-        },
-        {
-          "command": "svnRevisionManager.copyFilePathFull",
-          "when": "view == svnRevisionManagerView && viewItem == file",
-          "group": "navigation"
-        },
-        {
           "command": "svnRevisionManager.renameGroup",
           "when": "view == svnRevisionManagerView && viewItem == group",
           "group": "inline"
@@ -134,6 +129,16 @@
           "command": "svnRevisionManager.generateFileList",
           "when": "view == svnRevisionManagerView && viewItem == group",
           "group": "inline"
+        },
+        {
+          "command": "svnRevisionManager.copyFileName",
+          "when": "view == svnRevisionManagerView && viewItem == file",
+          "group": "navigation"
+        },
+        {
+          "command": "svnRevisionManager.copyFilePathFull",
+          "when": "view == svnRevisionManagerView && viewItem == file",
+          "group": "navigation"
         }
       ],
       "explorer/context": [
