@@ -10,6 +10,7 @@ Manage SVN revisions by organizing them into groups, viewing diffs, generating f
 - Lock/unlock files directly from VS Code
 - Copy file names and paths
 - Add Decorations for Locked, Modified, Unversioned, Ignored files in Explorer Tab
+- Show lock owner + date time in the status bar
 
 ## Requirements
 

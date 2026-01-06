@@ -256,6 +256,91 @@ function activate(context) {
 
     // Initial refresh (safe, won’t throw)
     decorationProvider.refreshAll();
+
+    // Status bar: SVN lock owner
+    const lockStatusBar = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 100);
+    lockStatusBar.tooltip = 'SVN Lock Info';
+    context.subscriptions.push(lockStatusBar);
+
+    // Only query for the currently active editor's file
+    const updateLockStatusBar = async () => {
+        try {
+            const editor = vscode.window.activeTextEditor;
+            if (!editor || editor.document.isUntitled) {
+                lockStatusBar.hide();
+                return;
+            }
+
+            const workingFolder = getWorkingFolderSafe();
+            const svnPath = getSvnPath();
+            if (!workingFolder || !svnPath) {
+                lockStatusBar.hide();
+                return;
+            }
+
+            const fsPath = editor.document.uri.fsPath;
+            if (!fsPath.toLowerCase().startsWith(workingFolder.toLowerCase())) {
+                lockStatusBar.hide();
+                return;
+            }
+
+            // 1) Get the repository URL for this local file
+            let localInfoOut = '';
+            try {
+                const { stdout } = await execAsync(`"${svnPath}" info "${fsPath}"`, { cwd: workingFolder });
+                localInfoOut = stdout || '';
+            } catch {
+                lockStatusBar.hide();
+                return;
+            }
+            const urlMatch = localInfoOut.match(/^\s*URL:\s*(.+)\s*$/mi);
+            const fileUrl = urlMatch ? urlMatch[1].trim() : null;
+            if (!fileUrl) {
+                lockStatusBar.hide();
+                return;
+            }
+
+            // 2) Query svn info on the URL to get lock owner (server-side)
+            let infoOut = '';
+            try {
+                const { stdout } = await execAsync(`"${svnPath}" info "${fileUrl}"`, { cwd: workingFolder });
+                infoOut = stdout || '';
+            } catch {
+                lockStatusBar.hide();
+                return;
+            }
+
+            const ownerMatch = infoOut.match(/Lock\s+Owner:\s*(.+)/i);
+            const createdMatch = infoOut.match(/Lock\s+Created:\s*(.+)/i);
+
+            if (ownerMatch) {
+                const owner = ownerMatch[1].trim();
+                const createdRaw = createdMatch ? createdMatch[1].trim() : '';
+                const createdShort = createdRaw ? createdRaw.replace(/\s*\(.*\)\s*$/, '').trim() : '';
+
+                // Keep text concise; put full data in tooltip
+                lockStatusBar.text = createdShort
+                    ? `$(lock) ${owner} @ ${createdShort}`
+                    : `$(lock) ${owner}`;
+                lockStatusBar.tooltip = createdRaw
+                    ? `SVN Lock\nOwner: ${owner}\nCreated: ${createdRaw}`
+                    : `SVN Lock\nOwner: ${owner}`;
+                lockStatusBar.backgroundColor = undefined;
+                lockStatusBar.show();
+            } else {
+                // Not locked → hide
+                lockStatusBar.hide();
+            }
+        } catch {
+            lockStatusBar.hide();
+        }
+    };
+
+    // Update only when the active editor changes or the active file is saved
+    context.subscriptions.push(vscode.window.onDidChangeActiveTextEditor(() => updateLockStatusBar()));
+    context.subscriptions.push(vscode.workspace.onDidSaveTextDocument(() => updateLockStatusBar()));
+    // Initial
+    updateLockStatusBar();
 }
 
 /* ------------------------------ TREE ITEM CLASS -------------------------------- */
@@ -774,6 +859,7 @@ class SvnDecorationProvider {
         this.onDidChangeFileDecorations = this._emitter.event;
         this._statusCache = new Map(); // key: normalized lowercase abs path, value: { status }
         this._isRefreshing = false;
+        this._repoRootUrl = null; // e.g., https://svn.server/repo
     }
 
     // Normalize Windows paths and lowercase to match Explorer on Windows
@@ -786,14 +872,17 @@ class SvnDecorationProvider {
         const entry = this._statusCache.get(key);
         if (!entry) return;
 
-        // Two bits: badge + color (use stable gitDecoration theme colors)
+        // Two bits: badge + color (tooltip can carry extra info)
         switch (entry.status) {
-            case 'locked':
+            case 'locked': {
+                const owner = entry.owner ? ` by ${entry.owner}` : '';
+                const createdShort = entry.created ? ` @ ${entry.created.replace(/\s*\(.*\)\s*$/, '').trim()}` : '';
                 return {
                     badge: 'L',
-                    tooltip: 'SVN: Locked',
-                    color: new vscode.ThemeColor('gitDecoration.ignoredResourceForeground') // neutral-ish
+                    tooltip: `SVN: Locked${owner}${createdShort}`,
+                    color: new vscode.ThemeColor('gitDecoration.ignoredResourceForeground')
                 };
+            }
             case 'modified':
                 return {
                     badge: 'M',
@@ -824,16 +913,21 @@ class SvnDecorationProvider {
             const root = getWorkingFolderSafe();
             if (!root || !fs.existsSync(root)) {
                 this._statusCache.clear();
-                this._emitter.fire(undefined); // refresh all
+                this._repoRootUrl = null;
+                this._emitter.fire(undefined);
                 return;
             }
 
+            // Cache repository root URL once per refresh
+            this._repoRootUrl = await this._getRepositoryRootUrl(root);
+
             const statuses = await this._collectStatuses(root);
             this._statusCache = statuses;
-            this._emitter.fire(undefined); // refresh all
+            this._emitter.fire(undefined);
         } catch (e) {
             console.error('SVN decorations refresh failed:', e);
             this._statusCache.clear();
+            this._repoRootUrl = null;
             this._emitter.fire(undefined);
         } finally {
             this._isRefreshing = false;
@@ -860,7 +954,6 @@ class SvnDecorationProvider {
             const trimmed = line.trim();
             const code = trimmed[0];
 
-            // Path is the last token
             const parts = trimmed.split(/\s+/);
             const rel = parts[parts.length - 1];
             if (!rel) continue;
@@ -876,22 +969,29 @@ class SvnDecorationProvider {
                 cache.set(key, { status: 'ignored' });
             }
 
-            // Lock candidates
             const header = line.slice(0, 8);
             if (/[KL]/.test(header)) {
                 lockCandidates.push({ abs, key });
             }
         }
 
-        // Confirm locks via 'svn info'
+        // Confirm locks using the file's repository URL from local `svn info`
         for (const { abs, key } of lockCandidates) {
+            const fileUrl = await this._getUrlForLocalPath(abs, root);
+            if (!fileUrl) continue;
             try {
-                const { stdout: infoOut } = await execAsync(`"${svnPath}" info "${abs}"`, { cwd: root });
-                if (/Lock\s+Owner:/i.test(infoOut)) {
-                    // Only set 'locked' if not already marked 'modified'
+                const { stdout: infoOut } = await execAsync(`"${svnPath}" info "${fileUrl}"`, { cwd: root });
+                const ownerMatch = infoOut.match(/Lock\s+Owner:\s*(.+)/i);
+                const createdMatch = infoOut.match(/Lock\s+Created:\s*(.+)/i);
+
+                if (ownerMatch) {
                     const existing = cache.get(key);
                     if (!existing || existing.status !== 'modified') {
-                        cache.set(key, { status: 'locked' });
+                        cache.set(key, {
+                            status: 'locked',
+                            owner: ownerMatch[1].trim(),
+                            created: createdMatch ? createdMatch[1].trim() : undefined
+                        });
                     }
                 }
             } catch {
@@ -901,10 +1001,43 @@ class SvnDecorationProvider {
 
         return cache;
     }
+
+    async _getRepositoryRootUrl(root) {
+        const svnPath = getSvnPath();
+        try {
+            const { stdout } = await execAsync(`"${svnPath}" info`, { cwd: root });
+            const repoRootMatch = stdout.match(/Repository\s+Root:\s*(.+)\s*$/mi);
+            const repoRoot = repoRootMatch ? repoRootMatch[1].trim() : null;
+            return repoRoot || null;
+        } catch {
+            return null;
+        }
+    }
+
+    // Get the repository URL for a local working-copy path via `svn info`
+    async _getUrlForLocalPath(absPath, root) {
+        const svnPath = getSvnPath();
+        try {
+            const { stdout } = await execAsync(`"${svnPath}" info "${absPath}"`, { cwd: root });
+            const m = stdout.match(/^\s*URL:\s*(.+)\s*$/mi);
+            return m ? m[1].trim() : null;
+        } catch {
+            return null;
+        }
+    }
+
+    _buildRepoUrl(root, relPath) {
+        // relPath like "WebContent\foo.jsp" → URL path "WebContent/foo.jsp"
+        if (!this._repoRootUrl) return null;
+        const urlPath = relPath.replace(/\\/g, '/').replace(/^\/+/, '');
+        return `${this._repoRootUrl}/${urlPath}`;
+    }
 }
 
 // Utility used by provider
 function execAsync(cmd, opts) {
+    console.log(cmd);
+    console.log(opts);
     return new Promise((resolve, reject) => {
         exec(cmd, opts, (error, stdout, stderr) => {
             if (error) reject(error);
