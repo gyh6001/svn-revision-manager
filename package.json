@@ -2,7 +2,7 @@
   "name": "svn-revision-manager",
   "displayName": "SVN Revision Manager",
   "description": "Manage SVN revisions by organizing them into groups, viewing diffs, generating file lists, and more.",
-  "version": "0.5.0",
+  "version": "0.6.0",
   "publisher": "GooiYinHong",
   "icon": "media/Logo.jpg",
   "engines": {
@@ -99,12 +99,27 @@
       {
         "command": "svnRevisionManager.unlockFile",
         "title": "SVN: Unlock File"
+      },
+      {
+        "command": "svnRevisionManager.refreshLocks",
+        "title": "SVN Locks: Refresh",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "svnRevisionManager.showLockInfo",
+        "title": "Show Lock Info",
+        "icon": "$(info)"
       }
     ],
     "menus": {
       "view/title": [
         {
           "command": "svnRevisionManager.addGroup",
+          "when": "view == svnRevisionManagerView",
+          "group": "navigation"
+        },
+        {
+          "command": "svnRevisionManager.refreshLocks",
           "when": "view == svnRevisionManagerView",
           "group": "navigation"
         }
@@ -139,6 +154,27 @@
           "command": "svnRevisionManager.copyFilePathFull",
           "when": "view == svnRevisionManagerView && viewItem == file",
           "group": "navigation"
+        },
+
+        {
+          "command": "svnRevisionManager.lockFile",
+          "when": "view == svnRevisionManagerView && viewItem == lockedFile",
+          "group": "navigation"
+        },
+        {
+          "command": "svnRevisionManager.forceLockFile",
+          "when": "view == svnRevisionManagerView && viewItem == lockedFile",
+          "group": "navigation"
+        },
+        {
+          "command": "svnRevisionManager.unlockFile",
+          "when": "view == svnRevisionManagerView && viewItem == lockedFile",
+          "group": "navigation"
+        },
+        {
+          "command": "svnRevisionManager.showLockInfo",
+          "when": "view == svnRevisionManagerView && viewItem == lockedFile",
+          "group": "inline"
         }
       ],
       "explorer/context": [

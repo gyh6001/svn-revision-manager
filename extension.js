@@ -1,7 +1,8 @@
 const vscode = require('vscode');
 const fs = require('fs');
 const path = require('path');
-const { exec } = require('child_process'); // you already use this
+const os = require('os');
+const { exec } = require('child_process');
 
 const SVN_WORKING_FOLDER = "";
 
@@ -13,7 +14,7 @@ function activate(context) {
     ensureStorageFolderExists(context.globalStorageUri.fsPath);
 
     const provider = new MyTreeDataProvider(context);
-    provider.load();   // <-- load groups + revisions
+    provider.load();
 
     vscode.window.createTreeView("svnRevisionManagerView", {
         treeDataProvider: provider
@@ -32,9 +33,9 @@ function activate(context) {
                 prompt: "Enter group name",
                 placeHolder: "e.g., Bug Fixes"
             });
-            
+
             if (!groupName) return;
-            
+
             provider.addGroup(groupName);
         })
     );
@@ -53,7 +54,7 @@ function activate(context) {
             }
         })
     );
-    
+
     /* -------------------- COMMAND: RENAME GROUP -------------------- */
     context.subscriptions.push(
         vscode.commands.registerCommand("svnRevisionManager.renameGroup", async (item) => {
@@ -80,7 +81,7 @@ function activate(context) {
         })
     );
 
-    /* ----------------- COMMAND: DELETE REVISION TO GROUP ---------------- */
+    /* ----------------- COMMAND: DELETE REVISION ---------------- */
     context.subscriptions.push(
         vscode.commands.registerCommand("svnRevisionManager.deleteRevision", async (item) => {
             const revision = item.revision;
@@ -98,23 +99,13 @@ function activate(context) {
         })
     );
 
-    /* ----------- COMMAND: OPEN ON DOUBLE CLICK (rev/file) ----------- */
+    /* ----------- COMMAND: OPEN ON DOUBLE CLICK (file) ----------- */
     context.subscriptions.push(
         vscode.commands.registerCommand("svnRevisionManager.openOnDoubleClick", async (item) => {
             const now = Date.now();
 
-            // double click detected
             if (item._lastClick && now - item._lastClick < 300) {
-
-                // // If revision item
-                // if (!item.isFile && !item.isGroup) {
-                //     const output = await runSvnDiff(item.revision);
-                //     const doc = await vscode.workspace.openTextDocument({ content: output, language: "diff" });
-                //     vscode.window.showTextDocument(doc);
-                // }
-
-                // If file item
-                if (item.isFile) {
+                if (item.isFile && item.revision) {
                     const rev = item.revision;
                     const file = item.filePath;
 
@@ -139,7 +130,7 @@ function activate(context) {
             item._lastClick = now;
         })
     );
-    
+
     /* ----------- COMMAND: COPY FILENAME ----------- */
     context.subscriptions.push(
         vscode.commands.registerCommand("svnRevisionManager.copyFileName", async (item) => {
@@ -151,7 +142,7 @@ function activate(context) {
             vscode.window.showInformationMessage(`Copied filename: ${fileName}`);
         })
     );
-    
+
     /* ----------- COMMAND: COPY FILEPATH+FILENAME ----------- */
     context.subscriptions.push(
         vscode.commands.registerCommand("svnRevisionManager.copyFilePathFull", async (item) => {
@@ -161,7 +152,7 @@ function activate(context) {
             vscode.window.showInformationMessage(`Copied: ${item.filePath}`);
         })
     );
-    
+
     /* ----------- COMMAND: LIST FILEPATH+FILENAME ----------- */
     context.subscriptions.push(
         vscode.commands.registerCommand("svnRevisionManager.generateFileList", async (item) => {
@@ -172,23 +163,28 @@ function activate(context) {
         })
     );
 
+    /* ----------- COMMAND: REFRESH LOCKS SECTION ----------- */
+    context.subscriptions.push(
+        vscode.commands.registerCommand("svnRevisionManager.refreshLocks", async () => {
+            provider.clearLocksCache();
+            provider.refresh();
+        })
+    );
+
     // Register lock file command
     let lockFileDisposable = vscode.commands.registerCommand('svnRevisionManager.lockFile', async (node) => {
         let filePath;
-        
-        // Check if called from explorer (node is a Uri) or from custom tree view
+
         if (node instanceof vscode.Uri) {
-            // Called from explorer
             const workingFolder = getWorkingFolder();
             filePath = path.relative(workingFolder, node.fsPath);
-        } else if (node && node.contextValue === 'file') {
-            // Called from custom tree view
+        } else if (node && (node.contextValue === 'file' || node.contextValue === 'lockedFile')) {
             filePath = node.filePath;
         } else {
             vscode.window.showErrorMessage('Please select a file.');
             return;
         }
-        
+
         await lockFile(filePath, false);
     });
 
@@ -196,26 +192,25 @@ function activate(context) {
     let forceLockFileDisposable = vscode.commands.registerCommand('svnRevisionManager.forceLockFile', async (node) => {
         let filePath;
         let fileName;
-        
-        // Check if called from explorer or custom tree view
+
         if (node instanceof vscode.Uri) {
             const workingFolder = getWorkingFolder();
             filePath = path.relative(workingFolder, node.fsPath);
             fileName = path.basename(node.fsPath);
-        } else if (node && node.contextValue === 'file') {
+        } else if (node && (node.contextValue === 'file' || node.contextValue === 'lockedFile')) {
             filePath = node.filePath;
             fileName = node.label;
         } else {
             vscode.window.showErrorMessage('Please select a file.');
             return;
         }
-        
+
         const confirm = await vscode.window.showWarningMessage(
             `Force lock "${fileName}"? This will steal the lock from another user.`,
             { modal: true },
             'Yes', 'No'
         );
-        
+
         if (confirm === 'Yes') {
             await lockFile(filePath, true);
         }
@@ -224,18 +219,17 @@ function activate(context) {
     // Register unlock file command
     let unlockFileDisposable = vscode.commands.registerCommand('svnRevisionManager.unlockFile', async (node) => {
         let filePath;
-        
-        // Check if called from explorer or custom tree view
+
         if (node instanceof vscode.Uri) {
             const workingFolder = getWorkingFolder();
             filePath = path.relative(workingFolder, node.fsPath);
-        } else if (node && node.contextValue === 'file') {
+        } else if (node && (node.contextValue === 'file' || node.contextValue === 'lockedFile')) {
             filePath = node.filePath;
         } else {
             vscode.window.showErrorMessage('Please select a file.');
             return;
         }
-        
+
         await unlockFile(filePath);
     });
 
@@ -254,7 +248,7 @@ function activate(context) {
     // Refresh on save
     context.subscriptions.push(vscode.workspace.onDidSaveTextDocument(() => decorationProvider.refreshAll()));
 
-    // Initial refresh (safe, won’t throw)
+    // Initial refresh
     decorationProvider.refreshAll();
 
     // Status bar: SVN lock owner
@@ -262,7 +256,6 @@ function activate(context) {
     lockStatusBar.tooltip = 'SVN Lock Info';
     context.subscriptions.push(lockStatusBar);
 
-    // Only query for the currently active editor's file
     const updateLockStatusBar = async () => {
         try {
             const editor = vscode.window.activeTextEditor;
@@ -284,7 +277,7 @@ function activate(context) {
                 return;
             }
 
-            // 1) Get the repository URL for this local file
+            // 1) Get URL for this file from local wc
             let localInfoOut = '';
             try {
                 const { stdout } = await execAsync(`"${svnPath}" info "${fsPath}"`, { cwd: workingFolder });
@@ -318,7 +311,6 @@ function activate(context) {
                 const createdRaw = createdMatch ? createdMatch[1].trim() : '';
                 const createdShort = createdRaw ? createdRaw.replace(/\s*\(.*\)\s*$/, '').trim() : '';
 
-                // Keep text concise; put full data in tooltip
                 lockStatusBar.text = createdShort
                     ? `$(lock) ${owner} @ ${createdShort}`
                     : `$(lock) ${owner}`;
@@ -328,7 +320,6 @@ function activate(context) {
                 lockStatusBar.backgroundColor = undefined;
                 lockStatusBar.show();
             } else {
-                // Not locked → hide
                 lockStatusBar.hide();
             }
         } catch {
@@ -336,11 +327,56 @@ function activate(context) {
         }
     };
 
-    // Update only when the active editor changes or the active file is saved
     context.subscriptions.push(vscode.window.onDidChangeActiveTextEditor(() => updateLockStatusBar()));
     context.subscriptions.push(vscode.workspace.onDidSaveTextDocument(() => updateLockStatusBar()));
-    // Initial
     updateLockStatusBar();
+
+    /* ----------- COMMAND: SHOW LOCK INFO ----------- */
+    context.subscriptions.push(
+        vscode.commands.registerCommand('svnRevisionManager.showLockInfo', async (node) => {
+            if (!node || !node.filePath) {
+                vscode.window.showErrorMessage('Please select a locked file.');
+                return;
+            }
+
+            const root = getWorkingFolderSafe();
+            if (!root) {
+                vscode.window.showErrorMessage('SVN working folder not configured.');
+                return;
+            }
+
+            // Show loading message
+            await vscode.window.withProgress({
+                location: vscode.ProgressLocation.Notification,
+                title: 'Fetching lock info...',
+                cancellable: false
+            }, async () => {
+                const abs = path.join(root, node.filePath);
+                const fileUrl = await getUrlForLocalPath(abs, root);
+
+                if (!fileUrl) {
+                    vscode.window.showWarningMessage(`Could not get SVN URL for: ${node.filePath}`);
+                    return;
+                }
+
+                const remoteLock = await getRemoteLockInfoByUrl(fileUrl, root);
+
+                if (remoteLock) {
+                    const createdShort = remoteLock.created 
+                        ? remoteLock.created.replace(/\s*\(.*\)\s*$/, '').trim() 
+                        : '';
+                    
+                    const message = createdShort
+                        ? `Locked by: ${remoteLock.owner} @ ${createdShort}`
+                        : `Locked by: ${remoteLock.owner}`;
+                    
+                    vscode.window.showInformationMessage(message);
+                } else {
+                    vscode.window.showWarningMessage(`No lock info found for: ${node.filePath}`);
+                }
+            });
+        })
+    );
 }
 
 /* ------------------------------ TREE ITEM CLASS -------------------------------- */
@@ -354,6 +390,16 @@ class MyTreeItem extends vscode.TreeItem {
         isFile = false,
         isGroup = false,
         groupName = null,
+
+        // New flags:
+        isSection = false,
+        sectionKey = null,
+        isLocksGroup = false,
+        locksGroupKey = null,
+        isLockedFile = false,
+        lockOwner = null,
+        lockCreated = null,
+
         command = null
     }) {
         super(label, collapsibleState);
@@ -364,9 +410,71 @@ class MyTreeItem extends vscode.TreeItem {
         this.isGroup = isGroup;
         this.groupName = groupName;
 
+        this.isSection = isSection;
+        this.sectionKey = sectionKey;
+
+        this.isLocksGroup = isLocksGroup;
+        this.locksGroupKey = locksGroupKey;
+
+        this.isLockedFile = isLockedFile;
+        this.lockOwner = lockOwner;
+        this.lockCreated = lockCreated;
+
+        if (isSection) {
+            this.contextValue = "section";
+            this.iconPath = new vscode.ThemeIcon(sectionKey === "locks" ? "lock" : "list-tree");
+            this.command = null;
+            return;
+        }
+
+        if (isLocksGroup) {
+            this.contextValue = "locksGroup";
+            this.iconPath = new vscode.ThemeIcon("lock");
+            this.command = null;
+            return;
+        }
+
+        if (isLockedFile) {
+            this.contextValue = "lockedFile";
+            this.iconPath = new vscode.ThemeIcon("lock");
+
+            if (lockOwner) {
+                // "mine" category - we have the info
+                const createdShort = lockCreated ? lockCreated.replace(/\s*\(.*\)\s*$/, '').trim() : '';
+                this.description = createdShort ? `${lockOwner} @ ${createdShort}` : lockOwner;
+
+                this.tooltip = [
+                    `SVN Locked File`,
+                    `Path: ${label}`,
+                    `Owner: ${lockOwner}`,
+                    lockCreated ? `Created: ${lockCreated}` : null
+                ].filter(Boolean).join("\n");
+            } else {
+                // "others" category - no details fetched, show placeholder
+                this.description = '';
+                this.tooltip = `SVN Locked File\nPath: ${label}\n\nClick "Show Lock Info" to see details`;
+            }
+
+            try {
+                const workingFolder = getWorkingFolderSafe();
+                if (workingFolder && filePath) {
+                    const abs = path.join(workingFolder, filePath);
+                    this.resourceUri = vscode.Uri.file(abs);
+                    this.command = {
+                        command: "vscode.open",
+                        title: "Open File",
+                        arguments: [this.resourceUri]
+                    };
+                }
+            } catch {
+                // ignore
+            }
+
+            return;
+        }
+
         if (isGroup) {
             this.contextValue = "group";
-
             this.iconPath = {
                 light: vscode.Uri.file(path.join(__dirname, 'media', 'dark-group.svg')),
                 dark: vscode.Uri.file(path.join(__dirname, 'media', 'light-group.svg'))
@@ -393,9 +501,7 @@ class MyTreeItem extends vscode.TreeItem {
 /* ------------------------------ SVN HELPERS -------------------------------- */
 
 function getCommitMessage(revision) {
-    const { exec } = require("child_process");
-
-    return new Promise((resolve, reject) => {
+    return new Promise((resolve) => {
         exec(
             `svn log -r ${revision} -l 1`,
             { cwd: getWorkingFolder() },
@@ -411,8 +517,6 @@ function getCommitMessage(revision) {
 }
 
 function getChangedFiles(revision) {
-    const { exec } = require("child_process");
-
     return new Promise((resolve, reject) => {
         exec(
             `"${getSvnPath()}" diff -c ${revision} --summarize`,
@@ -436,11 +540,9 @@ function getChangedFiles(revision) {
 }
 
 function runSvnDiff(revision, filePath = null) {
-    const { exec } = require("child_process");
-
     let cmd = filePath
         ? `"${getSvnPath()}" diff -c ${revision} "${filePath}"`
-        : `"${getSvnPath()}" diff -c ${revision}`;
+        : `"${getSvnPath()}" diff -c ${revision}"`;
 
     return new Promise((resolve, reject) => {
         exec(
@@ -454,6 +556,151 @@ function runSvnDiff(revision, filePath = null) {
     });
 }
 
+/* ------------------------------ LOCKS -------------------------------- */
+
+function parseSvnStatusShowUpdates(stdout) {
+    const lines = (stdout || '').split(/\r?\n/).filter(l => l.trim().length > 0);
+
+    // From `svn status --show-updates` (aka `svn status -u`), the lock flag is at column index 5
+    // within the first 7 status columns:
+    //   K = locked in this working copy (you hold a lock token)
+    //   O = locked by another user/working copy (only shown with -u/--show-updates)
+    //   T = lock token present but stolen / mismatched
+    //   B = lock token present but broken
+    const mineCandidates = new Set();
+    const othersCandidates = new Set();
+
+    for (const line of lines) {
+        if (/^Status against revision:/i.test(line.trim())) continue;
+        if (line.length < 7) continue;
+
+        const flags = line.slice(0, 7);
+        const lockFlag = flags[5]; // lock column
+
+        const trimmed = line.trim();
+        const parts = trimmed.split(/\s+/);
+        const rel = parts[parts.length - 1];
+
+        if (!rel || rel === '.' || rel === '..') continue;
+
+        if (lockFlag === 'K') {
+            mineCandidates.add(rel);
+        } else if (lockFlag === 'O' || lockFlag === 'T') {
+            // Locked by others uses O (and include T)
+            othersCandidates.add(rel);
+        }
+        // Note: per your request, we do NOT include 'B' in "Locked by me" (K-only).
+    }
+
+    return {
+        mineCandidates: Array.from(mineCandidates),
+        othersCandidates: Array.from(othersCandidates)
+    };
+}
+
+async function getUrlForLocalPath(absPath, root) {
+    const svnPath = getSvnPath();
+    try {
+        const { stdout } = await execAsync(`"${svnPath}" info "${absPath}"`, { cwd: root });
+        const m = stdout.match(/^\s*URL:\s*(.+)\s*$/mi);
+        return m ? m[1].trim() : null;
+    } catch {
+        return null;
+    }
+}
+
+async function getRemoteLockInfoByUrl(fileUrl, cwd) {
+    const svnPath = getSvnPath();
+    try {
+        const { stdout: infoOut } = await execAsync(`"${svnPath}" info "${fileUrl}"`, { cwd });
+        const ownerMatch = infoOut.match(/Lock\s+Owner:\s*(.+)/i);
+        const createdMatch = infoOut.match(/Lock\s+Created:\s*(.+)/i);
+
+        if (!ownerMatch) return null;
+
+        return {
+            owner: ownerMatch[1].trim(),
+            created: createdMatch ? createdMatch[1].trim() : ''
+        };
+    } catch {
+        return null;
+    }
+}
+
+async function getWorkingCopyLocks() {
+    const root = getWorkingFolderSafe();
+    const svnPath = getSvnPath();
+    if (!root || !fs.existsSync(root)) return [];
+
+    let statusOut = '';
+    try {
+        const { stdout } = await execAsync(`"${svnPath}" status --show-updates --ignore-externals`, { cwd: root });
+        statusOut = stdout || '';
+    } catch {
+        try {
+            const { stdout } = await execAsync(`"${svnPath}" status -u --ignore-externals`, { cwd: root });
+            statusOut = stdout || '';
+        } catch {
+            return [];
+        }
+    }
+
+    const { mineCandidates, othersCandidates } = parseSvnStatusShowUpdates(statusOut);
+
+    const locks = [];
+
+    // For "mine" locks - fetch details (usually small count, and we need to show them)
+    for (const rel of mineCandidates) {
+        const abs = path.join(root, rel);
+        const fileUrl = await getUrlForLocalPath(abs, root);
+        if (!fileUrl) continue;
+
+        const remoteLock = await getRemoteLockInfoByUrl(fileUrl, root);
+        if (!remoteLock) continue;
+
+        locks.push({
+            relPath: rel.replace(/\\/g, '/'),
+            owner: remoteLock.owner,
+            created: remoteLock.created,
+            category: 'mine'
+        });
+    }
+
+    // For "others" locks - do NOT fetch details (slow), just add the path
+    for (const rel of othersCandidates) {
+        locks.push({
+            relPath: rel.replace(/\\/g, '/'),
+            owner: null,      // Will be fetched on demand
+            created: null,    // Will be fetched on demand
+            category: 'others'
+        });
+    }
+
+    const uniq = new Map();
+    for (const l of locks) {
+        if (!uniq.has(l.relPath)) uniq.set(l.relPath, l);
+    }
+
+    return Array.from(uniq.values()).sort((a, b) =>
+        (a.category || '').localeCompare(b.category || '') ||
+        a.relPath.localeCompare(b.relPath)
+    );
+}
+
+function getLocalUsernameGuess() {
+    const cfg = vscode.workspace.getConfiguration("svnRevisionGroup");
+    const explicit = cfg.get("username");
+    if (explicit && String(explicit).trim()) return String(explicit).trim();
+
+    return (
+        process.env.SVN_USERNAME ||
+        process.env.USERNAME ||
+        process.env.USER ||
+        (os.userInfo ? os.userInfo().username : null) ||
+        ''
+    );
+}
+
 /* ------------------------------ PROVIDER -------------------------------- */
 
 class MyTreeDataProvider {
@@ -462,9 +709,11 @@ class MyTreeDataProvider {
         this.groups = {};
         this._onDidChangeTreeData = new vscode.EventEmitter();
         this.onDidChangeTreeData = this._onDidChangeTreeData.event;
+
+        this._locksCache = null;
+        this._locksCacheAt = 0;
     }
 
-    /* ---------- Load groups & revisions from JSON ---------- */
     load() {
         const filePath = getDataFilePath(this.context);
 
@@ -479,7 +728,6 @@ class MyTreeDataProvider {
         }
     }
 
-    /* ---------- Save groups ---------- */
     save() {
         const filePath = getDataFilePath(this.context);
 
@@ -491,7 +739,6 @@ class MyTreeDataProvider {
         }
     }
 
-    /* ---------- Add group ---------- */
     addGroup(name) {
         if (!this.groups[name]) {
             this.groups[name] = [];
@@ -500,42 +747,33 @@ class MyTreeDataProvider {
         }
     }
 
-    /* ---------- Delete group ---------- */
     deleteGroup(name) {
         delete this.groups[name];
         this.save();
         this.refresh();
     }
 
-    /* ---------- Rename group ---------- */
     renameGroup(oldName, newName) {
         if (!this.groups[oldName]) return;
 
-        // Move revisions to new group name
         this.groups[newName] = this.groups[oldName];
-
-        // Delete old group
         delete this.groups[oldName];
 
         this.save();
         this.refresh();
     }
 
-    /* ---------- Add revision into group ---------- */
     async addRevisionToGroup(groupName) {
         const revision = await vscode.window.showInputBox({
             prompt: "Enter SVN revision number",
             validateInput: value => {
-                if (!value || !/^\d+$/.test(value)) {
-                    return "Revision must be numeric";
-                }
+                if (!value || !/^\d+$/.test(value)) return "Revision must be numeric";
                 return null;
             }
         });
 
         if (!revision) return;
 
-        // Check duplicate
         const existing = this.groups[groupName].some(
             r => String(r.revision) === String(revision)
         );
@@ -547,23 +785,19 @@ class MyTreeDataProvider {
             return;
         }
 
-        // Fetch commit message
         const message = await getCommitMessage(revision);
 
-        // Add revision
         this.groups[groupName].push({
             revision: revision,
             message: message
         });
 
-        // SORT newest → oldest
         this.groups[groupName].sort((a, b) => Number(b.revision) - Number(a.revision));
 
         this.save();
         this.refresh();
     }
 
-    /* ---------- Add revision into group ---------- */
     deleteRevision(groupName, revision) {
         if (!this.groups[groupName]) return;
 
@@ -579,15 +813,47 @@ class MyTreeDataProvider {
         this._onDidChangeTreeData.fire();
     }
 
+    clearLocksCache() {
+        this._locksCache = null;
+        this._locksCacheAt = 0;
+    }
+
     getTreeItem(element) {
         return element;
     }
 
-    /* ---------- Build sidebar tree ---------- */
-    async getChildren(element) {
+    async _getLocksCached() {
+        const now = Date.now();
+        if (this._locksCache && (now - this._locksCacheAt) < 30_000) {
+            return this._locksCache;
+        }
 
-        // TOP LEVEL → LIST GROUPS
+        const locks = await getWorkingCopyLocks();
+        this._locksCache = locks;
+        this._locksCacheAt = now;
+        return locks;
+    }
+
+    async getChildren(element) {
         if (!element) {
+            return [
+                new MyTreeItem({
+                    label: "Revisions",
+                    collapsibleState: vscode.TreeItemCollapsibleState.Expanded,
+                    isSection: true,
+                    sectionKey: "revisions"
+                }),
+                new MyTreeItem({
+                    label: "Locks",
+                    collapsibleState: vscode.TreeItemCollapsibleState.Expanded,
+                    isSection: true,
+                    sectionKey: "locks"
+                })
+            ];
+        }
+
+        // SECTION: REVISIONS
+        if (element.isSection && element.sectionKey === "revisions") {
             return Object.keys(this.groups).map(groupName =>
                 new MyTreeItem({
                     label: groupName,
@@ -598,6 +864,59 @@ class MyTreeDataProvider {
             );
         }
 
+        // SECTION: LOCKS
+if (element.isSection && element.sectionKey === "locks") {
+    const locks = await this._getLocksCached();
+
+    const mine = locks.filter(l => l.category === 'mine');
+    const others = locks.filter(l => l.category === 'others');
+
+    return [
+        new MyTreeItem({
+            label: `Locked by me (${mine.length})`,
+            collapsibleState: vscode.TreeItemCollapsibleState.Collapsed,
+            isLocksGroup: true,
+            locksGroupKey: "mine"
+        }),
+        new MyTreeItem({
+            label: `Locked by others (${others.length})`,
+            collapsibleState: vscode.TreeItemCollapsibleState.Collapsed,
+            isLocksGroup: true,
+            locksGroupKey: "others"
+        })
+    ];
+}
+
+        // LOCKS GROUP: MINE
+if (element.isLocksGroup && element.locksGroupKey === "mine") {
+    const locks = await this._getLocksCached();
+    const mine = locks.filter(l => l.category === 'mine');
+
+    return mine.map(l => new MyTreeItem({
+        label: l.relPath,
+        collapsibleState: vscode.TreeItemCollapsibleState.None,
+        isLockedFile: true,
+        filePath: l.relPath,
+        lockOwner: l.owner,
+        lockCreated: l.created
+    }));
+}
+
+        // LOCKS GROUP: OTHERS (flat list)
+if (element.isLocksGroup && element.locksGroupKey === "others") {
+    const locks = await this._getLocksCached();
+    const others = locks.filter(l => l.category === 'others');
+
+    return others.map(l => new MyTreeItem({
+        label: l.relPath,
+        collapsibleState: vscode.TreeItemCollapsibleState.None,
+        isLockedFile: true,
+        filePath: l.relPath,
+        lockOwner: l.owner,
+        lockCreated: l.created
+    }));
+}
+
         // GROUP LEVEL → SHOW "+ Add Revision" + revisions
         if (element.isGroup) {
             const groupName = element.label;
@@ -607,7 +926,6 @@ class MyTreeDataProvider {
 
             const children = [];
 
-            // + ADD REVISION button
             children.push(
                 new MyTreeItem({
                     label: "+ Add Revision",
@@ -622,7 +940,6 @@ class MyTreeDataProvider {
                 })
             );
 
-            // Revisions
             children.push(
                 ...revisions.map(r =>
                     new MyTreeItem({
@@ -639,7 +956,7 @@ class MyTreeDataProvider {
         }
 
         // REVISION LEVEL → SHOW CHANGED FILES
-        if (!element.isFile && !element.isGroup) {
+        if (!element.isFile && !element.isGroup && element.contextValue === "revision") {
             const files = await getChangedFiles(element.revision);
 
             return files.map(f =>
@@ -649,7 +966,7 @@ class MyTreeDataProvider {
                     revision: element.revision,
                     filePath: f,
                     isFile: true,
-                    groupName: element.groupName  // <-- ADD THIS LINE
+                    groupName: element.groupName
                 })
             );
         }
@@ -657,7 +974,6 @@ class MyTreeDataProvider {
         return [];
     }
 
-    /* ---------- generateFileList ---------- */
     async generateFileList(groupName) {
         const revisions = this.groups[groupName] || [];
         const allFiles = new Set();
@@ -672,11 +988,8 @@ class MyTreeDataProvider {
         }
 
         const fileList = Array.from(allFiles).sort();
-
-        // Create output text
         const textOutput = fileList.join("\n");
 
-        // Open in VS Code new tab
         const doc = await vscode.workspace.openTextDocument({
             content: textOutput,
             language: "text"
@@ -694,36 +1007,6 @@ function ensureStorageFolderExists(folder) {
     }
 }
 
-function svnCat(filePath, revision) {
-    const { exec } = require("child_process");
-
-    return new Promise((resolve, reject) => {
-        exec(
-            `"${getSvnPath()}" cat "${filePath}" -r ${revision}`,
-            { cwd: getWorkingFolder(), maxBuffer: 1024 * 1024 * 10 },
-            (err, stdout, stderr) => {
-                if (err) {
-                    resolve("");
-                } else {
-                    resolve(stdout);
-                }
-            }
-        );
-    });
-}
-
-function getLanguage(file) {
-    if (file.endsWith(".js")) return "javascript";
-    if (file.endsWith(".ts")) return "typescript";
-    if (file.endsWith(".java")) return "java";
-    if (file.endsWith(".jsp")) return "jsp";
-    if (file.endsWith(".xml")) return "xml";
-    if (file.endsWith(".css")) return "css";
-    if (file.endsWith(".html")) return "html";
-
-    return "text";
-}
-
 function getWorkingFolder() {
     const config = vscode.workspace.getConfiguration("svnRevisionGroup");
     const folder = config.get("workingFolder");
@@ -738,7 +1021,6 @@ function getWorkingFolder() {
     return folder;
 }
 
-// Safe working folder helper (does not throw)
 function getWorkingFolderSafe() {
     try {
         const config = vscode.workspace.getConfiguration("svnRevisionGroup");
@@ -757,26 +1039,14 @@ function getSvnPath() {
     const svnPath = config.get("svnPath");
 
     if (!svnPath || svnPath.trim() === "") {
-        return "svn";   // Use system PATH
+        return "svn";
     }
 
     return svnPath;
 }
 
 function updateDataPathDescription(context) {
-    const config = vscode.workspace.getConfiguration("svnRevisionGroup");
-    const inspect = config.inspect("dataPath");
-
     const defaultPath = context.globalStorageUri.fsPath;
-
-    // Replace {default} placeholder in package.json setting description
-    // VS Code does NOT allow dynamic package.json, so we apply at runtime
-    vscode.languages.setLanguageConfiguration("json", {
-        onEnterRules: []
-    });
-
-    // Show info message to user (or log) about default storage path
-    // This is optional but helpful
     console.log(`SVN Revision Manager default storage path: ${defaultPath}`);
 }
 
@@ -788,7 +1058,6 @@ function getDataFilePath(context) {
         return path.join(customPath, "revisions.json");
     }
 
-    // Default path
     return path.join(context.globalStorageUri.fsPath, "revisions.json");
 }
 
@@ -804,17 +1073,16 @@ async function lockFile(filePath, force = false) {
     }
 
     const fullPath = path.join(workingFolder, filePath);
-    
+
     const message = await vscode.window.showInputBox({
         prompt: 'Enter lock message (optional)',
         placeHolder: 'Lock message'
     });
 
     if (message === undefined) {
-        return; // User cancelled
+        return;
     }
 
-    const { exec } = require('child_process');
     const forceFlag = force ? ' --force' : '';
     const messageFlag = message ? ` -m "${message}"` : '';
     const command = `"${svnPath}" lock${forceFlag}${messageFlag} "${fullPath}"`;
@@ -840,8 +1108,6 @@ async function unlockFile(filePath) {
     }
 
     const fullPath = path.join(workingFolder, filePath);
-
-    const { exec } = require('child_process');
     const command = `"${svnPath}" unlock "${fullPath}"`;
 
     exec(command, { cwd: workingFolder }, (error, stdout, stderr) => {
@@ -857,12 +1123,10 @@ class SvnDecorationProvider {
     constructor() {
         this._emitter = new vscode.EventEmitter();
         this.onDidChangeFileDecorations = this._emitter.event;
-        this._statusCache = new Map(); // key: normalized lowercase abs path, value: { status }
+        this._statusCache = new Map();
         this._isRefreshing = false;
-        this._repoRootUrl = null; // e.g., https://svn.server/repo
     }
 
-    // Normalize Windows paths and lowercase to match Explorer on Windows
     _keyFor(fsPath) {
         return path.normalize(fsPath).toLowerCase();
     }
@@ -872,7 +1136,6 @@ class SvnDecorationProvider {
         const entry = this._statusCache.get(key);
         if (!entry) return;
 
-        // Two bits: badge + color (tooltip can carry extra info)
         switch (entry.status) {
             case 'locked': {
                 const owner = entry.owner ? ` by ${entry.owner}` : '';
@@ -913,13 +1176,9 @@ class SvnDecorationProvider {
             const root = getWorkingFolderSafe();
             if (!root || !fs.existsSync(root)) {
                 this._statusCache.clear();
-                this._repoRootUrl = null;
                 this._emitter.fire(undefined);
                 return;
             }
-
-            // Cache repository root URL once per refresh
-            this._repoRootUrl = await this._getRepositoryRootUrl(root);
 
             const statuses = await this._collectStatuses(root);
             this._statusCache = statuses;
@@ -927,7 +1186,6 @@ class SvnDecorationProvider {
         } catch (e) {
             console.error('SVN decorations refresh failed:', e);
             this._statusCache.clear();
-            this._repoRootUrl = null;
             this._emitter.fire(undefined);
         } finally {
             this._isRefreshing = false;
@@ -941,19 +1199,29 @@ class SvnDecorationProvider {
 
         let stdout = '';
         try {
-            const result = await execAsync(`"${svnPath}" status -u --ignore-externals`, { cwd: root });
+            const result = await execAsync(`"${svnPath}" status --show-updates --ignore-externals`, { cwd: root });
             stdout = result.stdout || '';
         } catch {
-            return cache;
+            try {
+                const result = await execAsync(`"${svnPath}" status -u --ignore-externals`, { cwd: root });
+                stdout = result.stdout || '';
+            } catch {
+                return cache;
+            }
         }
 
         const lines = stdout.split(/\r?\n/).filter(l => l.trim().length > 0);
         const lockCandidates = [];
 
         for (const line of lines) {
-            const trimmed = line.trim();
-            const code = trimmed[0];
+            if (/^Status against revision:/i.test(line.trim())) continue;
+            if (line.length < 7) continue;
 
+            const flags = line.slice(0, 7);
+            const itemCode = flags[0];
+            const lockFlag = flags[5];
+
+            const trimmed = line.trim();
             const parts = trimmed.split(/\s+/);
             const rel = parts[parts.length - 1];
             if (!rel) continue;
@@ -961,83 +1229,38 @@ class SvnDecorationProvider {
             const abs = path.join(root, rel);
             const key = this._keyFor(abs);
 
-            if (code === 'M') {
-                cache.set(key, { status: 'modified' });
-            } else if (code === '?') {
-                cache.set(key, { status: 'unversioned' });
-            } else if (code === 'I') {
-                cache.set(key, { status: 'ignored' });
-            }
+            if (itemCode === 'M') cache.set(key, { status: 'modified' });
+            else if (itemCode === '?') cache.set(key, { status: 'unversioned' });
+            else if (itemCode === 'I') cache.set(key, { status: 'ignored' });
 
-            const header = line.slice(0, 8);
-            if (/[KL]/.test(header)) {
-                lockCandidates.push({ abs, key });
+            if (lockFlag === 'K' || lockFlag === 'O' || lockFlag === 'T' || lockFlag === 'B') {
+                lockCandidates.push({ rel, abs, key });
             }
         }
 
-        // Confirm locks using the file's repository URL from local `svn info`
-        for (const { abs, key } of lockCandidates) {
-            const fileUrl = await this._getUrlForLocalPath(abs, root);
+        for (const c of lockCandidates) {
+            const fileUrl = await getUrlForLocalPath(c.abs, root);
             if (!fileUrl) continue;
-            try {
-                const { stdout: infoOut } = await execAsync(`"${svnPath}" info "${fileUrl}"`, { cwd: root });
-                const ownerMatch = infoOut.match(/Lock\s+Owner:\s*(.+)/i);
-                const createdMatch = infoOut.match(/Lock\s+Created:\s*(.+)/i);
 
-                if (ownerMatch) {
-                    const existing = cache.get(key);
-                    if (!existing || existing.status !== 'modified') {
-                        cache.set(key, {
-                            status: 'locked',
-                            owner: ownerMatch[1].trim(),
-                            created: createdMatch ? createdMatch[1].trim() : undefined
-                        });
-                    }
-                }
-            } catch {
-                // ignore
+            const remoteLock = await getRemoteLockInfoByUrl(fileUrl, root);
+            if (!remoteLock) continue;
+
+            const existing = cache.get(c.key);
+            if (!existing || existing.status !== 'modified') {
+                cache.set(c.key, {
+                    status: 'locked',
+                    owner: remoteLock.owner,
+                    created: remoteLock.created
+                });
             }
         }
 
         return cache;
     }
-
-    async _getRepositoryRootUrl(root) {
-        const svnPath = getSvnPath();
-        try {
-            const { stdout } = await execAsync(`"${svnPath}" info`, { cwd: root });
-            const repoRootMatch = stdout.match(/Repository\s+Root:\s*(.+)\s*$/mi);
-            const repoRoot = repoRootMatch ? repoRootMatch[1].trim() : null;
-            return repoRoot || null;
-        } catch {
-            return null;
-        }
-    }
-
-    // Get the repository URL for a local working-copy path via `svn info`
-    async _getUrlForLocalPath(absPath, root) {
-        const svnPath = getSvnPath();
-        try {
-            const { stdout } = await execAsync(`"${svnPath}" info "${absPath}"`, { cwd: root });
-            const m = stdout.match(/^\s*URL:\s*(.+)\s*$/mi);
-            return m ? m[1].trim() : null;
-        } catch {
-            return null;
-        }
-    }
-
-    _buildRepoUrl(root, relPath) {
-        // relPath like "WebContent\foo.jsp" → URL path "WebContent/foo.jsp"
-        if (!this._repoRootUrl) return null;
-        const urlPath = relPath.replace(/\\/g, '/').replace(/^\/+/, '');
-        return `${this._repoRootUrl}/${urlPath}`;
-    }
 }
 
 // Utility used by provider
 function execAsync(cmd, opts) {
-    console.log(cmd);
-    console.log(opts);
     return new Promise((resolve, reject) => {
         exec(cmd, opts, (error, stdout, stderr) => {
             if (error) reject(error);
