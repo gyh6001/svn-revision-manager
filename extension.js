@@ -237,6 +237,130 @@ function activate(context) {
     context.subscriptions.push(forceLockFileDisposable);
     context.subscriptions.push(unlockFileDisposable);
 
+    /* ----------- COMMAND: REVERT FILE ----------- */
+    context.subscriptions.push(
+        vscode.commands.registerCommand('svnRevisionManager.revertFile', async (node) => {
+            let filePath;
+            if (node instanceof vscode.Uri) {
+                const workingFolder = getWorkingFolder();
+                filePath = path.relative(workingFolder, node.fsPath);
+            } else if (node && (node.contextValue === 'file' || node.contextValue === 'lockedFile')) {
+                filePath = node.filePath;
+            } else {
+                vscode.window.showErrorMessage('Please select a file.');
+                return;
+            }
+
+            const confirm = await vscode.window.showWarningMessage(
+                `Revert all local changes to "${path.basename(filePath)}"? This cannot be undone.`,
+                { modal: true },
+                'Yes', 'No'
+            );
+
+            if (confirm !== 'Yes') return;
+
+            const workingFolder = getWorkingFolderSafe();
+            const svnPath = getSvnPath();
+            if (!workingFolder || !svnPath) {
+                vscode.window.showErrorMessage('SVN working folder or svn path not configured.');
+                return;
+            }
+
+            const fullPath = path.join(workingFolder, filePath);
+            exec(`"${svnPath}" revert "${fullPath}"`, { cwd: workingFolder }, (error, stdout, stderr) => {
+                if (error) {
+                    vscode.window.showErrorMessage(`Revert failed: ${stderr || error.message}`);
+                    return;
+                }
+                vscode.window.showInformationMessage(`Reverted: ${path.basename(filePath)}`);
+                decorationProvider.refreshAll();
+                provider.clearLocksCache();
+                provider.refresh();
+            });
+        })
+    );
+
+    /* ----------- COMMAND: SHOW SVN INFO ----------- */
+    context.subscriptions.push(
+        vscode.commands.registerCommand('svnRevisionManager.infoFile', async (node) => {
+            let filePath;
+            if (node instanceof vscode.Uri) {
+                const workingFolder = getWorkingFolder();
+                filePath = path.relative(workingFolder, node.fsPath);
+            } else if (node && (node.contextValue === 'file' || node.contextValue === 'lockedFile')) {
+                filePath = node.filePath;
+            } else {
+                vscode.window.showErrorMessage('Please select a file.');
+                return;
+            }
+
+            const workingFolder = getWorkingFolderSafe();
+            const svnPath = getSvnPath();
+            if (!workingFolder || !svnPath) {
+                vscode.window.showErrorMessage('SVN working folder or svn path not configured.');
+                return;
+            }
+
+            try {
+                const fullPath = path.join(workingFolder, filePath);
+                const { stdout } = await execAsync(`"${svnPath}" info "${fullPath}"`, { cwd: workingFolder });
+                const doc = await vscode.workspace.openTextDocument({
+                    content: stdout || 'No svn info output',
+                    language: 'plaintext'
+                });
+                vscode.window.showTextDocument(doc);
+            } catch (err) {
+                vscode.window.showErrorMessage(`Failed to run svn info: ${err.message || err}`);
+            }
+        })
+    );
+
+    /* ----------- COMMAND: UPDATE FILE ----------- */
+    context.subscriptions.push(
+        vscode.commands.registerCommand('svnRevisionManager.updateFile', async (node) => {
+            let filePath;
+            if (node instanceof vscode.Uri) {
+                const workingFolder = getWorkingFolder();
+                filePath = path.relative(workingFolder, node.fsPath);
+            } else if (node && (node.contextValue === 'file' || node.contextValue === 'lockedFile')) {
+                filePath = node.filePath;
+            } else {
+                vscode.window.showErrorMessage('Please select a file.');
+                return;
+            }
+
+            const workingFolder = getWorkingFolderSafe();
+            const svnPath = getSvnPath();
+            if (!workingFolder || !svnPath) {
+                vscode.window.showErrorMessage('SVN working folder or svn path not configured.');
+                return;
+            }
+
+            const fullPath = path.join(workingFolder, filePath);
+            
+            await vscode.window.withProgress({
+                location: vscode.ProgressLocation.Notification,
+                title: `Updating ${path.basename(filePath)}...`,
+                cancellable: false
+            }, async () => {
+                return new Promise((resolve) => {
+                    exec(`"${svnPath}" update "${fullPath}"`, { cwd: workingFolder, maxBuffer: 1024 * 1024 * 5 }, (error, stdout, stderr) => {
+                        if (error) {
+                            vscode.window.showErrorMessage(`Update failed: ${stderr || error.message}`);
+                        } else {
+                            const out = stdout && stdout.trim() ? stdout.trim() : `Updated: ${path.basename(filePath)}`;
+                            vscode.window.showInformationMessage(out.split(/\r?\n/)[0]);
+                            decorationProvider.refreshAll();
+                            provider.clearLocksCache();
+                            provider.refresh();
+                        }
+                        resolve();
+                    });
+                });
+            });
+        })
+    );
+
     // Register decoration provider
     const decorationProvider = new SvnDecorationProvider();
     context.subscriptions.push(vscode.window.registerFileDecorationProvider(decorationProvider));

@@ -2,7 +2,7 @@
   "name": "svn-revision-manager",
   "displayName": "SVN Revision Manager",
   "description": "Manage SVN revisions by organizing them into groups, viewing diffs, generating file lists, and more.",
-  "version": "0.6.0",
+  "version": "0.6.1",
   "publisher": "GooiYinHong",
   "icon": "media/Logo.jpg",
   "engines": {
@@ -101,6 +101,18 @@
         "title": "SVN: Unlock File"
       },
       {
+        "command": "svnRevisionManager.revertFile",
+        "title": "SVN: Revert File"
+      },
+      {
+        "command": "svnRevisionManager.infoFile",
+        "title": "SVN: File Info"
+      },
+      {
+        "command": "svnRevisionManager.updateFile",
+        "title": "SVN: Update File"
+      },
+      {
         "command": "svnRevisionManager.refreshLocks",
         "title": "SVN Locks: Refresh",
         "icon": "$(refresh)"
@@ -155,7 +167,21 @@
           "when": "view == svnRevisionManagerView && viewItem == file",
           "group": "navigation"
         },
-
+        {
+          "command": "svnRevisionManager.revertFile",
+          "when": "view == svnRevisionManagerView && viewItem == file",
+          "group": "navigation"
+        },
+        {
+          "command": "svnRevisionManager.infoFile",
+          "when": "view == svnRevisionManagerView && viewItem == file",
+          "group": "navigation"
+        },
+        {
+          "command": "svnRevisionManager.updateFile",
+          "when": "view == svnRevisionManagerView && viewItem == file",
+          "group": "navigation"
+        },
         {
           "command": "svnRevisionManager.lockFile",
           "when": "view == svnRevisionManagerView && viewItem == lockedFile",
@@ -168,6 +194,21 @@
         },
         {
           "command": "svnRevisionManager.unlockFile",
+          "when": "view == svnRevisionManagerView && viewItem == lockedFile",
+          "group": "navigation"
+        },
+        {
+          "command": "svnRevisionManager.revertFile",
+          "when": "view == svnRevisionManagerView && viewItem == lockedFile",
+          "group": "navigation"
+        },
+        {
+          "command": "svnRevisionManager.infoFile",
+          "when": "view == svnRevisionManagerView && viewItem == lockedFile",
+          "group": "navigation"
+        },
+        {
+          "command": "svnRevisionManager.updateFile",
           "when": "view == svnRevisionManagerView && viewItem == lockedFile",
           "group": "navigation"
         },
@@ -189,6 +230,18 @@
         {
           "command": "svnRevisionManager.unlockFile",
           "group": "svn@3"
+        },
+        {
+          "command": "svnRevisionManager.revertFile",
+          "group": "svn@4"
+        },
+        {
+          "command": "svnRevisionManager.infoFile",
+          "group": "svn@5"
+        },
+        {
+          "command": "svnRevisionManager.updateFile",
+          "group": "svn@6"
         }
       ]
     },
