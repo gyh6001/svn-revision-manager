@@ -2,7 +2,7 @@
   "name": "svn-revision-manager",
   "displayName": "SVN Revision Manager",
   "description": "Manage SVN revisions by organizing them into groups, viewing diffs, generating file lists, and more.",
-  "version": "0.6.1",
+  "version": "0.7.0",
   "publisher": "GooiYinHong",
   "icon": "media/Logo.jpg",
   "engines": {
@@ -216,6 +216,21 @@
           "command": "svnRevisionManager.showLockInfo",
           "when": "view == svnRevisionManagerView && viewItem == lockedFile",
           "group": "inline"
+        },
+        {
+          "command": "svnRevisionManager.revertFile",
+          "when": "view == svnRevisionManagerView && viewItem == file",
+          "group": "svn@1"
+        },
+        {
+          "command": "svnRevisionManager.infoFile",
+          "when": "view == svnRevisionManagerView && viewItem == file",
+          "group": "svn@2"
+        },
+        {
+          "command": "svnRevisionManager.updateFile",
+          "when": "view == svnRevisionManagerView && viewItem == file",
+          "group": "svn@3"
         }
       ],
       "explorer/context": [

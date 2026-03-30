@@ -523,6 +523,9 @@ class MyTreeItem extends vscode.TreeItem {
         isLockedFile = false,
         lockOwner = null,
         lockCreated = null,
+        isNewFile = false,
+        isModifiedFile = false,
+        isModifiedLocked = false,
 
         command = null
     }) {
@@ -543,6 +546,10 @@ class MyTreeItem extends vscode.TreeItem {
         this.isLockedFile = isLockedFile;
         this.lockOwner = lockOwner;
         this.lockCreated = lockCreated;
+        
+        this.isNewFile = isNewFile;
+        this.isModifiedFile = isModifiedFile;
+        this.isModifiedLocked = isModifiedLocked;
 
         if (isSection) {
             this.contextValue = "section";
@@ -553,8 +560,36 @@ class MyTreeItem extends vscode.TreeItem {
 
         if (isLocksGroup) {
             this.contextValue = "locksGroup";
-            this.iconPath = new vscode.ThemeIcon("lock");
+            let icon = "lock";
+            if (locksGroupKey === "newFiles") icon = "new-file";
+            else if (locksGroupKey === "modifiedLocked") icon = "edit";
+            else if (locksGroupKey === "modifiedNotLocked") icon = "warning";
+            this.iconPath = new vscode.ThemeIcon(icon);
             this.command = null;
+            return;
+        }
+
+        if (isNewFile) {
+            this.contextValue = "file";
+            this.iconPath = new vscode.ThemeIcon("new-file");
+            this.description = "new";
+            this.tooltip = `New file (not in SVN)\nPath: ${label}`;
+
+            try {
+                const workingFolder = getWorkingFolderSafe();
+                if (workingFolder && filePath) {
+                    const abs = path.join(workingFolder, filePath);
+                    this.resourceUri = vscode.Uri.file(abs);
+                    this.command = {
+                        command: "vscode.open",
+                        title: "Open File",
+                        arguments: [this.resourceUri]
+                    };
+                }
+            } catch {
+                // ignore
+            }
+
             return;
         }
 
@@ -618,6 +653,32 @@ class MyTreeItem extends vscode.TreeItem {
                 command: "svnRevisionManager.openOnDoubleClick",
                 arguments: [this]
             };
+        }
+        
+        if (isModifiedFile) {
+            this.contextValue = isModifiedLocked ? "lockedFile" : "file";
+            this.iconPath = new vscode.ThemeIcon(isModifiedLocked ? "lock" : "edit");
+            this.description = isModifiedLocked ? "modified + locked" : "modified";
+            this.tooltip = isModifiedLocked
+                ? `Modified (Locked)\nPath: ${label}`
+                : `Modified (Not Locked)\nPath: ${label}`;
+
+            try {
+                const workingFolder = getWorkingFolderSafe();
+                if (workingFolder && filePath) {
+                    const abs = path.join(workingFolder, filePath);
+                    this.resourceUri = vscode.Uri.file(abs);
+                    this.command = {
+                        command: "vscode.open",
+                        title: "Open File",
+                        arguments: [this.resourceUri]
+                    };
+                }
+            } catch {
+                // ignore
+            }
+
+            return;
         }
     }
 }
@@ -685,21 +746,19 @@ function runSvnDiff(revision, filePath = null) {
 function parseSvnStatusShowUpdates(stdout) {
     const lines = (stdout || '').split(/\r?\n/).filter(l => l.trim().length > 0);
 
-    // From `svn status --show-updates` (aka `svn status -u`), the lock flag is at column index 5
-    // within the first 7 status columns:
-    //   K = locked in this working copy (you hold a lock token)
-    //   O = locked by another user/working copy (only shown with -u/--show-updates)
-    //   T = lock token present but stolen / mismatched
-    //   B = lock token present but broken
     const mineCandidates = new Set();
     const othersCandidates = new Set();
+    const newFiles = new Set();
+    const modifiedLocked = new Set();
+    const modifiedNotLocked = new Set();
 
     for (const line of lines) {
         if (/^Status against revision:/i.test(line.trim())) continue;
         if (line.length < 7) continue;
 
         const flags = line.slice(0, 7);
-        const lockFlag = flags[5]; // lock column
+        const itemCode = flags[0];
+        const lockFlag = flags[5];
 
         const trimmed = line.trim();
         const parts = trimmed.split(/\s+/);
@@ -707,18 +766,33 @@ function parseSvnStatusShowUpdates(stdout) {
 
         if (!rel || rel === '.' || rel === '..') continue;
 
+        // Detect new files: '?' = unversioned, 'A' = added but not committed
+        if (itemCode === '?' || itemCode === 'A') {
+            newFiles.add(rel);
+        }
+
+        // Detect modified files: 'M' = modified
+        if (itemCode === 'M') {
+            if (lockFlag === 'K') {
+                modifiedLocked.add(rel);
+            } else {
+                modifiedNotLocked.add(rel);
+            }
+        }
+
         if (lockFlag === 'K') {
             mineCandidates.add(rel);
         } else if (lockFlag === 'O' || lockFlag === 'T') {
-            // Locked by others uses O (and include T)
             othersCandidates.add(rel);
         }
-        // Note: per your request, we do NOT include 'B' in "Locked by me" (K-only).
     }
 
     return {
         mineCandidates: Array.from(mineCandidates),
-        othersCandidates: Array.from(othersCandidates)
+        othersCandidates: Array.from(othersCandidates),
+        newFiles: Array.from(newFiles),
+        modifiedLocked: Array.from(modifiedLocked),
+        modifiedNotLocked: Array.from(modifiedNotLocked)
     };
 }
 
@@ -751,10 +825,12 @@ async function getRemoteLockInfoByUrl(fileUrl, cwd) {
     }
 }
 
+// ...existing code...
+
 async function getWorkingCopyLocks() {
     const root = getWorkingFolderSafe();
     const svnPath = getSvnPath();
-    if (!root || !fs.existsSync(root)) return [];
+    if (!root || !fs.existsSync(root)) return { locks: [], newFiles: [], modifiedLocked: [], modifiedNotLocked: [] };
 
     let statusOut = '';
     try {
@@ -765,15 +841,15 @@ async function getWorkingCopyLocks() {
             const { stdout } = await execAsync(`"${svnPath}" status -u --ignore-externals`, { cwd: root });
             statusOut = stdout || '';
         } catch {
-            return [];
+            return { locks: [], newFiles: [], modifiedLocked: [], modifiedNotLocked: [] };
         }
     }
 
-    const { mineCandidates, othersCandidates } = parseSvnStatusShowUpdates(statusOut);
+    const { mineCandidates, othersCandidates, newFiles, modifiedLocked, modifiedNotLocked } = parseSvnStatusShowUpdates(statusOut);
 
     const locks = [];
 
-    // For "mine" locks - fetch details (usually small count, and we need to show them)
+    // For "mine" locks - fetch details
     for (const rel of mineCandidates) {
         const abs = path.join(root, rel);
         const fileUrl = await getUrlForLocalPath(abs, root);
@@ -790,12 +866,12 @@ async function getWorkingCopyLocks() {
         });
     }
 
-    // For "others" locks - do NOT fetch details (slow), just add the path
+    // For "others" locks - do NOT fetch details
     for (const rel of othersCandidates) {
         locks.push({
             relPath: rel.replace(/\\/g, '/'),
-            owner: null,      // Will be fetched on demand
-            created: null,    // Will be fetched on demand
+            owner: null,
+            created: null,
             category: 'others'
         });
     }
@@ -805,11 +881,24 @@ async function getWorkingCopyLocks() {
         if (!uniq.has(l.relPath)) uniq.set(l.relPath, l);
     }
 
-    return Array.from(uniq.values()).sort((a, b) =>
+    const sortedLocks = Array.from(uniq.values()).sort((a, b) =>
         (a.category || '').localeCompare(b.category || '') ||
         a.relPath.localeCompare(b.relPath)
     );
+
+    const sortedNewFiles = newFiles.map(f => f.replace(/\\/g, '/')).sort();
+    const sortedModifiedLocked = modifiedLocked.map(f => f.replace(/\\/g, '/')).sort();
+    const sortedModifiedNotLocked = modifiedNotLocked.map(f => f.replace(/\\/g, '/')).sort();
+
+    return {
+        locks: sortedLocks,
+        newFiles: sortedNewFiles,
+        modifiedLocked: sortedModifiedLocked,
+        modifiedNotLocked: sortedModifiedNotLocked
+    };
 }
+
+// ...existing code...
 
 function getLocalUsernameGuess() {
     const cfg = vscode.workspace.getConfiguration("svnRevisionGroup");
@@ -958,6 +1047,18 @@ class MyTreeDataProvider {
         return locks;
     }
 
+    async _getLocksCached() {
+        const now = Date.now();
+        if (this._locksCache && (now - this._locksCacheAt) < 30_000) {
+            return this._locksCache;
+        }
+
+        const result = await getWorkingCopyLocks();
+        this._locksCache = result;
+        this._locksCacheAt = now;
+        return result;
+    }
+
     async getChildren(element) {
         if (!element) {
             return [
@@ -989,59 +1090,124 @@ class MyTreeDataProvider {
         }
 
         // SECTION: LOCKS
-if (element.isSection && element.sectionKey === "locks") {
-    const locks = await this._getLocksCached();
+        if (element.isSection && element.sectionKey === "locks") {
+            const result = await this._getLocksCached();
+            const locks = result.locks || [];
+            const newFiles = result.newFiles || [];
+            const modifiedLocked = result.modifiedLocked || [];
+            const modifiedNotLocked = result.modifiedNotLocked || [];
 
-    const mine = locks.filter(l => l.category === 'mine');
-    const others = locks.filter(l => l.category === 'others');
+            const mine = locks.filter(l => l.category === 'mine');
+            const others = locks.filter(l => l.category === 'others');
 
-    return [
-        new MyTreeItem({
-            label: `Locked by me (${mine.length})`,
-            collapsibleState: vscode.TreeItemCollapsibleState.Collapsed,
-            isLocksGroup: true,
-            locksGroupKey: "mine"
-        }),
-        new MyTreeItem({
-            label: `Locked by others (${others.length})`,
-            collapsibleState: vscode.TreeItemCollapsibleState.Collapsed,
-            isLocksGroup: true,
-            locksGroupKey: "others"
-        })
-    ];
-}
+            return [
+                new MyTreeItem({
+                    label: `New Files (${newFiles.length})`,
+                    collapsibleState: vscode.TreeItemCollapsibleState.Collapsed,
+                    isLocksGroup: true,
+                    locksGroupKey: "newFiles"
+                }),
+                new MyTreeItem({
+                    label: `Locked by me (${mine.length})`,
+                    collapsibleState: vscode.TreeItemCollapsibleState.Collapsed,
+                    isLocksGroup: true,
+                    locksGroupKey: "mine"
+                }),
+                new MyTreeItem({
+                    label: `Locked by others (${others.length})`,
+                    collapsibleState: vscode.TreeItemCollapsibleState.Collapsed,
+                    isLocksGroup: true,
+                    locksGroupKey: "others"
+                }),
+                new MyTreeItem({
+                    label: `Modified (Locked) (${modifiedLocked.length})`,
+                    collapsibleState: vscode.TreeItemCollapsibleState.Collapsed,
+                    isLocksGroup: true,
+                    locksGroupKey: "modifiedLocked"
+                }),
+                new MyTreeItem({
+                    label: `Modified (Not Locked) (${modifiedNotLocked.length})`,
+                    collapsibleState: vscode.TreeItemCollapsibleState.Collapsed,
+                    isLocksGroup: true,
+                    locksGroupKey: "modifiedNotLocked"
+                })
+            ];
+        }
+        
+        // LOCKS GROUP: MODIFIED (LOCKED)
+        if (element.isLocksGroup && element.locksGroupKey === "modifiedLocked") {
+            const result = await this._getLocksCached();
+            const modifiedLocked = result.modifiedLocked || [];
+
+            return modifiedLocked.map(f => new MyTreeItem({
+                label: f,
+                collapsibleState: vscode.TreeItemCollapsibleState.None,
+                isModifiedFile: true,
+                isModifiedLocked: true,
+                filePath: f
+            }));
+        }
+
+        // LOCKS GROUP: MODIFIED (NOT LOCKED)
+        if (element.isLocksGroup && element.locksGroupKey === "modifiedNotLocked") {
+            const result = await this._getLocksCached();
+            const modifiedNotLocked = result.modifiedNotLocked || [];
+
+            return modifiedNotLocked.map(f => new MyTreeItem({
+                label: f,
+                collapsibleState: vscode.TreeItemCollapsibleState.None,
+                isModifiedFile: true,
+                isModifiedLocked: false,
+                filePath: f
+            }));
+        }
+
+        // LOCKS GROUP: NEW FILES
+        if (element.isLocksGroup && element.locksGroupKey === "newFiles") {
+            const result = await this._getLocksCached();
+            const newFiles = result.newFiles || [];
+
+            return newFiles.map(f => new MyTreeItem({
+                label: f,
+                collapsibleState: vscode.TreeItemCollapsibleState.None,
+                isNewFile: true,
+                filePath: f
+            }));
+        }
 
         // LOCKS GROUP: MINE
-if (element.isLocksGroup && element.locksGroupKey === "mine") {
-    const locks = await this._getLocksCached();
-    const mine = locks.filter(l => l.category === 'mine');
+        if (element.isLocksGroup && element.locksGroupKey === "mine") {
+            const result = await this._getLocksCached();
+            const locks = result.locks || [];
+            const mine = locks.filter(l => l.category === 'mine');
 
-    return mine.map(l => new MyTreeItem({
-        label: l.relPath,
-        collapsibleState: vscode.TreeItemCollapsibleState.None,
-        isLockedFile: true,
-        filePath: l.relPath,
-        lockOwner: l.owner,
-        lockCreated: l.created
-    }));
-}
+            return mine.map(l => new MyTreeItem({
+                label: l.relPath,
+                collapsibleState: vscode.TreeItemCollapsibleState.None,
+                isLockedFile: true,
+                filePath: l.relPath,
+                lockOwner: l.owner,
+                lockCreated: l.created
+            }));
+        }
 
-        // LOCKS GROUP: OTHERS (flat list)
-if (element.isLocksGroup && element.locksGroupKey === "others") {
-    const locks = await this._getLocksCached();
-    const others = locks.filter(l => l.category === 'others');
+        // LOCKS GROUP: OTHERS
+        if (element.isLocksGroup && element.locksGroupKey === "others") {
+            const result = await this._getLocksCached();
+            const locks = result.locks || [];
+            const others = locks.filter(l => l.category === 'others');
 
-    return others.map(l => new MyTreeItem({
-        label: l.relPath,
-        collapsibleState: vscode.TreeItemCollapsibleState.None,
-        isLockedFile: true,
-        filePath: l.relPath,
-        lockOwner: l.owner,
-        lockCreated: l.created
-    }));
-}
+            return others.map(l => new MyTreeItem({
+                label: l.relPath,
+                collapsibleState: vscode.TreeItemCollapsibleState.None,
+                isLockedFile: true,
+                filePath: l.relPath,
+                lockOwner: l.owner,
+                lockCreated: l.created
+            }));
+        }
 
-        // GROUP LEVEL → SHOW "+ Add Revision" + revisions
+        // GROUP LEVEL SHOW "+ Add Revision" + revisions
         if (element.isGroup) {
             const groupName = element.label;
             const revisions = this.groups[groupName] || [];
