@@ -2,7 +2,7 @@
   "name": "svn-revision-manager",
   "displayName": "SVN Revision Manager",
   "description": "Manage SVN revisions by organizing them into groups, viewing diffs, generating file lists, and more.",
-  "version": "0.7.0",
+  "version": "1.0.0",
   "publisher": "GooiYinHong",
   "icon": "media/Logo.jpg",
   "engines": {
@@ -54,11 +54,8 @@
       },
       {
         "command": "svnRevisionManager.addRevisionToGroup",
-        "title": "Add Revision to Group"
-      },
-      {
-        "command": "svnRevisionManager.openOnDoubleClick",
-        "title": "Open Diff"
+        "title": "Add Revision to Group",
+        "icon": "$(add)"
       },
       {
         "command": "svnRevisionManager.deleteGroup",
@@ -126,17 +123,22 @@
     "menus": {
       "view/title": [
         {
-          "command": "svnRevisionManager.addGroup",
-          "when": "view == svnRevisionManagerView",
-          "group": "navigation"
-        },
-        {
           "command": "svnRevisionManager.refreshLocks",
           "when": "view == svnRevisionManagerView",
           "group": "navigation"
         }
       ],
       "view/item/context": [
+        {
+          "command": "svnRevisionManager.addGroup",
+          "when": "view == svnRevisionManagerView && viewItem == revisionsSection",
+          "group": "inline"
+        },
+        {
+          "command": "svnRevisionManager.addRevisionToGroup",
+          "when": "view == svnRevisionManagerView && viewItem == group",
+          "group": "inline"
+        },
         {
           "command": "svnRevisionManager.deleteGroup",
           "when": "view == svnRevisionManagerView && viewItem == group",
@@ -170,17 +172,17 @@
         {
           "command": "svnRevisionManager.revertFile",
           "when": "view == svnRevisionManagerView && viewItem == file",
-          "group": "navigation"
+          "group": "svn@1"
         },
         {
           "command": "svnRevisionManager.infoFile",
           "when": "view == svnRevisionManagerView && viewItem == file",
-          "group": "navigation"
+          "group": "svn@2"
         },
         {
           "command": "svnRevisionManager.updateFile",
           "when": "view == svnRevisionManagerView && viewItem == file",
-          "group": "navigation"
+          "group": "svn@3"
         },
         {
           "command": "svnRevisionManager.lockFile",
@@ -200,37 +202,22 @@
         {
           "command": "svnRevisionManager.revertFile",
           "when": "view == svnRevisionManagerView && viewItem == lockedFile",
-          "group": "navigation"
+          "group": "svn@1"
         },
         {
           "command": "svnRevisionManager.infoFile",
           "when": "view == svnRevisionManagerView && viewItem == lockedFile",
-          "group": "navigation"
+          "group": "svn@2"
         },
         {
           "command": "svnRevisionManager.updateFile",
           "when": "view == svnRevisionManagerView && viewItem == lockedFile",
-          "group": "navigation"
+          "group": "svn@3"
         },
         {
           "command": "svnRevisionManager.showLockInfo",
           "when": "view == svnRevisionManagerView && viewItem == lockedFile",
           "group": "inline"
-        },
-        {
-          "command": "svnRevisionManager.revertFile",
-          "when": "view == svnRevisionManagerView && viewItem == file",
-          "group": "svn@1"
-        },
-        {
-          "command": "svnRevisionManager.infoFile",
-          "when": "view == svnRevisionManagerView && viewItem == file",
-          "group": "svn@2"
-        },
-        {
-          "command": "svnRevisionManager.updateFile",
-          "when": "view == svnRevisionManagerView && viewItem == file",
-          "group": "svn@3"
         }
       ],
       "explorer/context": [
@@ -264,10 +251,13 @@
       "type": "object",
       "title": "SVN Revision Group Settings",
       "properties": {
-        "svnRevisionGroup.workingFolder": {
-          "type": "string",
-          "default": "",
-          "description": "Full path to your SVN working copy folder."
+        "svnRevisionGroup.workingFolders": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [],
+          "description": "List of full paths to your SVN working copy folders. Example: [\"C:/Projects/repo1\", \"C:/Projects/repo2\"]"
         },
         "svnRevisionGroup.svnPath": {
           "type": "string",
