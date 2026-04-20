@@ -1584,19 +1584,25 @@ class MyTreeDataProvider {
             const root = element.rootFolder;
             const revisions = (this.groups[root] && this.groups[root][element.groupName]) || [];
 
-            return revisions.map(entry => {
-                const rev = typeof entry === 'object' ? entry.revision : entry;
-                const msg = typeof entry === 'object' ? entry.message : '';
-                return new MyTreeItem({
-                    label: `r${rev}`,
-                    collapsibleState: vscode.TreeItemCollapsibleState.Collapsed,
-                    revision: rev,
-                    groupName: element.groupName,
-                    rootFolder: root,
-                    rootLabel: element.rootLabel,
-                    description: msg || undefined
+            return [...revisions]
+                .sort((a, b) => {
+                    const revA = Number(typeof a === 'object' ? a.revision : a);
+                    const revB = Number(typeof b === 'object' ? b.revision : b);
+                    return revA - revB;
+                })
+                .map(entry => {
+                    const rev = typeof entry === 'object' ? entry.revision : entry;
+                    const msg = typeof entry === 'object' ? entry.message : '';
+                    return new MyTreeItem({
+                        label: `r${rev}`,
+                        collapsibleState: vscode.TreeItemCollapsibleState.Collapsed,
+                        revision: rev,
+                        groupName: element.groupName,
+                        rootFolder: root,
+                        rootLabel: element.rootLabel,
+                        description: msg || undefined
+                    });
                 });
-            });
         }
 
         /* ---------- REVISION LEVEL (files in a revision) ---------- */
