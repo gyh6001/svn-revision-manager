@@ -608,6 +608,7 @@ class MyTreeItem extends vscode.TreeItem {
         rootFolder = null,
         rootLabel = null,
         description = null,
+        tooltip = null,
 
         command = null
     }) {
@@ -635,9 +636,8 @@ class MyTreeItem extends vscode.TreeItem {
         this.rootFolder = rootFolder;
         this.rootLabel = rootLabel;
         
-        if (description) {
-            this.description = description;
-        }
+        if (description) this.description = description;
+        if (tooltip) this.tooltip = tooltip;
 
         if (isSection) {
             if (sectionKey === "revisions") {
@@ -822,59 +822,77 @@ function getChangedFiles(revision, root) {
     });
 }
 
-function getCommitMessageFromSvn(revision, root) {
+/**
+ * Get commit info (message, date, file count) from SVN for a revision.
+ * @param {string} revision
+ * @param {string} root
+ * @returns {Promise<{message: string, date: string, fileCount: number}>}
+ */
+function getCommitInfoFromSvn(revision, root) {
     const svnPath = getSvnPath();
     const cwd = root || getWorkingFolderSafe();
-    if (!cwd) return Promise.resolve('');
+    if (!cwd) return Promise.resolve({ message: '', date: '', fileCount: 0 });
 
     return new Promise((resolve) => {
-        exec(`"${svnPath}" log -r ${revision}`, { cwd, maxBuffer: 1024 * 1024 }, (error, stdout) => {
-            if (error) return resolve('');
+        exec(`"${svnPath}" log -r ${revision} -v`, { cwd, maxBuffer: 1024 * 1024 }, (error, stdout) => {
+            if (error) return resolve({ message: '', date: '', fileCount: 0 });
 
-            // SVN log output format:
-            // ------------------------------------------------------------------------
-            // r12345 | author | 2026-04-15 10:00:00 +0800 (Tue, 15 Apr 2026) | 1 line
-            //
-            // Commit message here
-            // ------------------------------------------------------------------------
             const lines = (stdout || '').split(/\r?\n/);
-            const messageLines = [];
+            let message = '';
+            let date = '';
+            let fileCount = 0;
+
+            // Parse header line: r12345 | author | 2026-04-15 10:00:00 +0800 (...) | 1 line
+            for (const line of lines) {
+                if (/^r\d+\s*\|/.test(line.trim())) {
+                    const parts = line.split('|');
+                    if (parts.length >= 3) {
+                        const rawDate = parts[2].trim();
+                        // Extract just YYYY-MM-DD HH:MM
+                        const dateMatch = rawDate.match(/(\d{4}-\d{2}-\d{2})\s+(\d{2}:\d{2})/);
+                        if (dateMatch) {
+                            date = `${dateMatch[1]} ${dateMatch[2]}`;
+                        }
+                    }
+                    break;
+                }
+            }
+
+            // Count changed files (lines starting with spaces + A/M/D/R)
+            for (const line of lines) {
+                if (/^\s+[AMDR]\s+/.test(line)) {
+                    fileCount++;
+                }
+            }
+
+            // Parse commit message (after blank line following header)
             let foundHeader = false;
             let pastBlank = false;
+            const messageLines = [];
 
             for (const line of lines) {
                 if (/^-{4,}$/.test(line.trim())) {
-                    if (foundHeader && messageLines.length > 0) {
-                        break; // End of message
-                    }
+                    if (foundHeader && messageLines.length > 0) break;
                     foundHeader = true;
                     pastBlank = false;
                     continue;
                 }
-
                 if (foundHeader && !pastBlank) {
-                    // Skip the header line (r12345 | author | date | N lines)
-                    if (/^r\d+\s*\|/.test(line.trim())) {
-                        continue;
-                    }
-                    // Skip the blank line after header
-                    if (line.trim() === '') {
-                        pastBlank = true;
-                        continue;
-                    }
+                    if (/^r\d+\s*\|/.test(line.trim())) continue;
+                    if (line.trim() === '') { pastBlank = true; continue; }
                 }
-
                 if (foundHeader && pastBlank) {
                     messageLines.push(line);
                 }
             }
 
-            // Trim trailing empty lines
             while (messageLines.length > 0 && messageLines[messageLines.length - 1].trim() === '') {
                 messageLines.pop();
             }
 
-            resolve(messageLines.join('\n').trim());
+            message = messageLines.join('\n').trim();
+
+            resolve({ message, date, fileCount });
         });
     });
 }
@@ -1289,7 +1307,6 @@ class MyTreeDataProvider {
         if (!this.groups[root]) this.groups[root] = {};
         if (!this.groups[root][groupName]) this.groups[root][groupName] = [];
 
-        // Check for duplicates
         const exists = this.groups[root][groupName].some(r => {
             const rNum = typeof r === 'object' ? r.revision : r;
             return rNum === rev;
@@ -1300,15 +1317,20 @@ class MyTreeDataProvider {
             return;
         }
 
-        // Fetch commit message from SVN
         let message = '';
+        let date = '';
+        let fileCount = 0;
+
         try {
-            message = await getCommitMessageFromSvn(rev, root);
+            const info = await getCommitInfoFromSvn(rev, root);
+            message = info.message || '';
+            date = info.date || '';
+            fileCount = info.fileCount || 0;
         } catch {
-            // If fetch fails, leave message empty
+            // If fetch fails, leave empty
         }
 
-        this.groups[root][groupName].push({ revision: rev, message: message || '' });
+        this.groups[root][groupName].push({ revision: rev, message, date, fileCount });
         this._saveRoot(root);
         this.refresh();
     }
@@ -1584,6 +1606,32 @@ class MyTreeDataProvider {
             const root = element.rootFolder;
             const revisions = (this.groups[root] && this.groups[root][element.groupName]) || [];
 
+            // Enrich any entries missing date or fileCount
+            let needsSave = false;
+            for (let i = 0; i < revisions.length; i++) {
+                const entry = revisions[i];
+                if (typeof entry === 'object') {
+                    const missingDate = !entry.date;
+                    const missingFileCount = entry.fileCount === undefined || entry.fileCount === null;
+
+                    if (missingDate || missingFileCount) {
+                        try {
+                            const info = await getCommitInfoFromSvn(entry.revision, root);
+                            if (missingDate && info.date) entry.date = info.date;
+                            if (missingFileCount && info.fileCount) entry.fileCount = info.fileCount;
+                            if (!entry.message && info.message) entry.message = info.message;
+                            needsSave = true;
+                        } catch {
+                            // ignore, show what we have
+                        }
+                    }
+                }
+            }
+
+            if (needsSave) {
+                this._saveRoot(root);
+            }
+
             return [...revisions]
                 .sort((a, b) => {
                     const revA = Number(typeof a === 'object' ? a.revision : a);
@@ -1592,7 +1640,16 @@ class MyTreeDataProvider {
                 })
                 .map(entry => {
                     const rev = typeof entry === 'object' ? entry.revision : entry;
-                    const msg = typeof entry === 'object' ? entry.message : '';
+                    const msg = typeof entry === 'object' ? (entry.message || '') : '';
+                    const date = typeof entry === 'object' ? (entry.date || '') : '';
+                    const fileCount = typeof entry === 'object' ? (entry.fileCount || 0) : 0;
+
+                    const parts = [];
+                    if (date) parts.push(date);
+                    //if (fileCount > 0) parts.push(`${fileCount} file${fileCount !== 1 ? 's' : ''}`);
+                    if (msg) parts.push(msg);
+                    const description = parts.join('  ·  ');
+
                     return new MyTreeItem({
                         label: `r${rev}`,
                         collapsibleState: vscode.TreeItemCollapsibleState.Collapsed,
@@ -1600,7 +1657,13 @@ class MyTreeDataProvider {
                         groupName: element.groupName,
                         rootFolder: root,
                         rootLabel: element.rootLabel,
-                        description: msg || undefined
+                        description: description || undefined,
+                        tooltip: [
+                            `Revision: r${rev}`,
+                            date ? `Date: ${date}` : null,
+                            fileCount ? `Files changed: ${fileCount}` : null,
+                            msg ? `Message: ${msg}` : null
+                        ].filter(Boolean).join('\n')
                     });
                 });
         }
