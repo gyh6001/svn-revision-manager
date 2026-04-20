@@ -163,21 +163,55 @@ function activate(context) {
     );
 
     /* ----------- COMMAND: OPEN DIFF ----------- */
-    // context.subscriptions.push(
-    //     vscode.commands.registerCommand("svnRevisionManager.openOnDoubleClick", async (item) => {
-    //         if (!item || !item.filePath || !item.revision) return;
+    context.subscriptions.push(
+        vscode.commands.registerCommand("svnRevisionManager.openOnDoubleClick", async (item) => {
+            if (!item || !item.filePath || !item.revision) return;
 
-    //         const root = item.rootFolder || getWorkingFolderSafe();
-    //         if (!root) return;
+            const root = item.rootFolder || getWorkingFolderSafe();
+            if (!root) return;
 
-    //         const diff = await runSvnDiff(item.revision, item.filePath, root);
-    //         const doc = await vscode.workspace.openTextDocument({
-    //             content: diff || 'No diff output',
-    //             language: 'diff'
-    //         });
-    //         vscode.window.showTextDocument(doc);
-    //     })
-    // );
+            const rev = String(item.revision);
+            const prevRev = String(Number(rev) - 1);
+            const filePath = item.filePath; // repo-relative path e.g. /trunk/src/file.php
+
+            await vscode.window.withProgress({
+                location: vscode.ProgressLocation.Notification,
+                title: `Loading diff r${prevRev} ↔ r${rev}...`,
+                cancellable: false
+            }, async () => {
+                try {
+                    const [prevContent, currContent] = await Promise.all([
+                        getSvnFileAtRevision(filePath, prevRev, root),
+                        getSvnFileAtRevision(filePath, rev, root)
+                    ]);
+
+                    // Write to temp files
+                    const tmpDir = path.join(os.tmpdir(), 'svn-revision-manager');
+                    if (!fs.existsSync(tmpDir)) {
+                        fs.mkdirSync(tmpDir, { recursive: true });
+                    }
+
+                    const fileName = path.basename(filePath);
+                    const safeName = fileName.replace(/[^a-zA-Z0-9._-]/g, '_');
+
+                    const prevFile = path.join(tmpDir, `r${prevRev}_${safeName}`);
+                    const currFile = path.join(tmpDir, `r${rev}_${safeName}`);
+
+                    fs.writeFileSync(prevFile, prevContent, 'utf-8');
+                    fs.writeFileSync(currFile, currContent, 'utf-8');
+
+                    await vscode.commands.executeCommand(
+                        'vscode.diff',
+                        vscode.Uri.file(prevFile),
+                        vscode.Uri.file(currFile),
+                        `${fileName}  r${prevRev} ↔ r${rev}`
+                    );
+                } catch (err) {
+                    vscode.window.showErrorMessage(`Failed to open diff: ${err.message || err}`);
+                }
+            });
+        })
+    );
 
     /* ----------- COMMAND: COPY FILENAME ----------- */
     context.subscriptions.push(
@@ -742,11 +776,11 @@ class MyTreeItem extends vscode.TreeItem {
         if (isFile && filePath) {
             this.contextValue = "file";
             this.iconPath = new vscode.ThemeIcon("file");
-            // this.command = {
-            //     command: "svnRevisionManager.openOnDoubleClick",
-            //     title: "Open Diff",
-            //     arguments: [this]
-            // };
+            this.command = {
+                command: "svnRevisionManager.openOnDoubleClick",
+                title: "Open Diff",
+                arguments: [this]
+            };
             return;
         }
         
@@ -893,6 +927,43 @@ function getCommitInfoFromSvn(revision, root) {
             message = messageLines.join('\n').trim();
 
             resolve({ message, date, fileCount });
+        });
+    });
+}
+
+/**
+ * Get the repository root URL for a working copy.
+ */
+function getRepoRootUrl(root) {
+    const svnPath = getSvnPath();
+    if (!svnPath || !root) return Promise.resolve(null);
+
+    return new Promise((resolve) => {
+        exec(`"${svnPath}" info "${root}"`, { cwd: root }, (error, stdout) => {
+            if (error) return resolve(null);
+            const m = (stdout || '').match(/^\s*Repository Root:\s*(.+)\s*$/mi);
+            resolve(m ? m[1].trim() : null);
+        });
+    });
+}
+
+/**
+ * Get file content at a specific revision from SVN.
+ */
+async function getSvnFileAtRevision(repoRelPath, revision, root) {
+    const svnPath = getSvnPath();
+    if (!svnPath || !root) return '';
+
+    const repoRoot = await getRepoRootUrl(root);
+    if (!repoRoot) return '';
+
+    const cleanPath = repoRelPath.startsWith('/') ? repoRelPath : '/' + repoRelPath;
+    const fileUrl = repoRoot + cleanPath;
+
+    return new Promise((resolve) => {
+        exec(`"${svnPath}" cat "${fileUrl}" -r ${revision}`, { cwd: root, maxBuffer: 1024 * 1024 * 10 }, (error, stdout) => {
+            if (error) return resolve('');
+            resolve(stdout || '');
         });
     });
 }
@@ -2051,6 +2122,17 @@ function execAsync(cmd, opts) {
     });
 }
 
-function deactivate() {}
+
+function deactivate() {
+    // Clean up temp diff files on extension deactivation
+    try {
+        const tmpDir = path.join(os.tmpdir(), 'svn-revision-manager');
+        if (fs.existsSync(tmpDir)) {
+            for (const file of fs.readdirSync(tmpDir)) {
+                try { fs.unlinkSync(path.join(tmpDir, file)); } catch { /* ignore */ }
+            }
+        }
+    } catch { /* ignore */ }
+}
 
 module.exports = { activate, deactivate };
